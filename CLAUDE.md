@@ -50,3 +50,25 @@ uv run ruff format .          # Format
 - All `.py` files start with 2-line `ABOUTME:` comment
 - TDD: tests first, then minimal implementation
 - Simple over clever — readability is the priority
+
+## Non-Interactive Shell Commands
+
+**ALWAYS use non-interactive flags** with file operations to avoid hanging on confirmation prompts.
+
+```bash
+cp -f source dest           # NOT: cp source dest
+mv -f source dest           # NOT: mv source dest
+rm -f file                  # NOT: rm file
+rm -rf directory            # NOT: rm -r directory
+```
+
+Other commands: `apt-get -y`, `HOMEBREW_NO_AUTO_UPDATE=1 brew`, `scp -o BatchMode=yes`.
+
+## Session Completion
+
+When ending a work session, complete ALL steps:
+
+1. Run quality gates (tests, linters) if code changed
+2. Commit all changes
+3. Push to remote — work is NOT complete until `git push` succeeds
+4. Provide context for next session
