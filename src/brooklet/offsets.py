@@ -8,7 +8,7 @@ import re
 import tempfile
 from pathlib import Path
 
-_SAFE_NAME_RE = re.compile(r"^[a-zA-Z0-9_\-\.]+$")
+_SAFE_NAME_RE = re.compile(r"^[a-zA-Z0-9_\-\./]+$")
 
 
 def _validate_name(value: str, label: str) -> None:
@@ -16,14 +16,21 @@ def _validate_name(value: str, label: str) -> None:
     if not _SAFE_NAME_RE.match(value):
         msg = (
             f"{label} must contain only safe characters "
-            f"(alphanumeric, hyphens, underscores, dots), got {value!r}"
+            f"(alphanumeric, hyphens, underscores, dots, slashes), got {value!r}"
         )
+        raise ValueError(msg)
+    if ".." in Path(value).parts:
+        msg = f"{label} must not contain path traversal (got {value!r})"
         raise ValueError(msg)
 
 
 def _offset_path(offsets_dir: Path, group: str, topic: str) -> Path:
-    """Build the offset file path for a group-topic pair."""
-    return offsets_dir / f"{group}-{topic}.json"
+    """Build the offset file path for a group-topic pair.
+
+    Sanitizes '/' in topic names to '--' for safe filenames.
+    """
+    safe_topic = topic.replace("/", "--")
+    return offsets_dir / f"{group}-{safe_topic}.json"
 
 
 def load(offsets_dir: str | Path, group: str, topic: str) -> int:

@@ -78,13 +78,13 @@ class TestOffsets:
         with pytest.raises(ValueError, match="Corrupt offset file"):
             load(offsets_dir, group="g", topic="t")
 
-    def test_name_validation_rejects_path_separators(self, offsets_dir):
-        """Group/topic names with path separators are rejected."""
-        with pytest.raises(ValueError, match="safe characters"):
+    def test_name_validation_rejects_path_traversal(self, offsets_dir):
+        """Group/topic names with path traversal are rejected."""
+        with pytest.raises(ValueError, match="path traversal"):
             save(offsets_dir, group="../etc", topic="t", offset=1)
 
-        with pytest.raises(ValueError, match="safe characters"):
+        with pytest.raises(ValueError, match="path traversal"):
             save(offsets_dir, group="g", topic="../../passwd", offset=1)
 
-        with pytest.raises(ValueError, match="safe characters"):
+        with pytest.raises(ValueError, match="path traversal"):
             load(offsets_dir, group="../etc", topic="t")

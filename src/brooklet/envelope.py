@@ -46,3 +46,27 @@ def wrap(line: str, seq: int, source: str | None = None) -> Event | None:
         event.setdefault("_src", source)
 
     return event
+
+
+def serialize(event: dict, seq: int, source: str | None = None) -> str:
+    """Serialize a dict to a JSON line with envelope fields.
+
+    Inverse of wrap(): takes a dict and returns a JSON string line with
+    envelope fields injected. Same semantics as wrap():
+    - _ts: set to now() if missing, preserved if present
+    - _seq: always set by brooklet (overwrites)
+    - _src: set from source param if missing, preserved if present
+
+    Returns a JSON string with trailing newline.
+    """
+    # _ts: auto-set if missing, preserve if present
+    event.setdefault("_ts", datetime.now(UTC).isoformat())
+
+    # _seq: always set by brooklet — canonical offset key
+    event["_seq"] = seq
+
+    # _src: set from parameter if missing, preserve if present
+    if source is not None:
+        event.setdefault("_src", source)
+
+    return json.dumps(event) + "\n"

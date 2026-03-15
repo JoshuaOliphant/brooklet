@@ -69,10 +69,10 @@ class TestRegistry:
         source = reg.get("t")
         assert source["path"] == "/tmp/new.jsonl"
 
-    def test_register_name_with_path_separator_raises(self, brooklet_dir):
-        """Topic names with path separators are rejected."""
+    def test_register_name_with_path_traversal_raises(self, brooklet_dir):
+        """Topic names with path traversal are rejected."""
         reg = Registry(brooklet_dir)
-        with pytest.raises(ValueError, match="safe characters"):
+        with pytest.raises(ValueError, match="path traversal"):
             reg.register("../etc", path="/tmp/x.jsonl", mode="single-file")
 
     def test_corrupt_sources_file_raises_with_context(self, brooklet_dir):

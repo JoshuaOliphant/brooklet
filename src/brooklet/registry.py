@@ -13,7 +13,7 @@ from brooklet.types import Mode, SourceDef
 
 VALID_MODES: set[str] = set(get_args(Mode))
 
-_SAFE_NAME_RE = re.compile(r"^[a-zA-Z0-9_\-\.]+$")
+_SAFE_NAME_RE = re.compile(r"^[a-zA-Z0-9_\-\./]+$")
 
 
 def _validate_topic_name(name: str) -> None:
@@ -21,8 +21,11 @@ def _validate_topic_name(name: str) -> None:
     if not _SAFE_NAME_RE.match(name):
         msg = (
             f"topic name must contain only safe characters "
-            f"(alphanumeric, hyphens, underscores, dots), got {name!r}"
+            f"(alphanumeric, hyphens, underscores, dots, slashes), got {name!r}"
         )
+        raise ValueError(msg)
+    if ".." in Path(name).parts:
+        msg = f"topic name must not contain path traversal (got {name!r})"
         raise ValueError(msg)
 
 
@@ -89,6 +92,21 @@ class Registry:
 
         self._sources[name] = SourceDef(path=path, mode=mode)
         self._save()
+
+    def register_local(self, name: str, path: str) -> None:
+        """Register a locally-produced topic. Called by produce() on first write."""
+        if name in self._sources:
+            existing = self._sources[name]
+            if existing.get("type") != "local" or existing["path"] != path:
+                msg = f"topic {name!r} is already registered as an external source"
+                raise ValueError(msg)
+            return  # Already registered as local with same path, idempotent
+        self._sources[name] = {"path": path, "mode": "single-file", "type": "local"}
+        self._save()
+
+    def is_external(self, name: str) -> bool:
+        """Check if a topic is registered as an external source."""
+        return name in self._sources and self._sources[name].get("type") != "local"
 
     def get(self, name: str) -> SourceDef:
         """Get the source definition for a registered topic.

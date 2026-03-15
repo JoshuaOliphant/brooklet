@@ -7,26 +7,32 @@ Lightweight JSONL-based event streaming library. Adds consumer coordination (off
 Brooklet is a **consumer coordination layer**, not a message broker. External tools write JSONL; brooklet reads it with offset tracking.
 
 ### Core Modules
-- `envelope.py` — Thin metadata injection (_ts, _seq, _src) on read
+- `envelope.py` — Metadata injection (_ts, _seq, _src): `wrap()` on read, `serialize()` on write
 - `offsets.py` — Byte offset persistence per consumer group
-- `registry.py` — Maps external JSONL paths to topic names (.brooklet/sources.json)
+- `registry.py` — Maps topic names to sources; supports external (registered) and local (produced)
 - `consumer.py` — Batch and follow-mode iterators over JSONL files
-- `stream.py` — Orchestrator tying registry + consumer together
+- `stream.py` — Orchestrator: `register()`, `produce()`, `consume()`, `topics()`
 - `__init__.py` — Public API: `brooklet.open(path)`
 
 ### Key Decisions
-- No `produce()` — external tools write JSONL, brooklet reads (DEC-006)
-- Source registration is core — maps arbitrary paths to topic names (DEC-007)
-- Thin envelope with `_ts`, `_seq`, `_src` auto-injected on read (DEC-004)
+- `produce()` is in core — consumers that transform and re-emit need a clean write path (DEC-011)
+- Unified topic namespace with auto-registration — `produce()` auto-registers local topics (DEC-012)
+- Source registration maps arbitrary external JSONL paths to topic names (DEC-007)
+- Thin envelope with `_ts`, `_seq`, `_src` auto-injected on both read and write (DEC-004)
 - watchdog for filesystem watching in follow mode (DEC-008)
 - Python 3.12+ minimum (DEC-009)
+- Path-style topic names (`scout/stats`) create nested directories
 - Full design docs at `second_brain/projects/_active/brooklet/`
 
 ### Data Layout
 ```
 <stream_dir>/
+├── <topic>/
+│   └── data.jsonl            # Produced events (local topics)
+├── <parent>/<child>/
+│   └── data.jsonl            # Path-style nested topics
 └── .brooklet/
-    ├── sources.json          # Registered external sources
+    ├── sources.json          # Registry (external + local sources)
     └── offsets/
         └── <group>-<topic>.json  # Byte offset per consumer group
 ```
