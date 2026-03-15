@@ -1,6 +1,7 @@
 # ABOUTME: Event consumer with batch and follow modes
 # ABOUTME: Reads JSONL lines from registered sources with offset tracking
 
+import fnmatch
 import glob as glob_module
 import logging
 import warnings
@@ -43,11 +44,9 @@ class Consumer:
         self._file_handle = None
         self._observer = None
 
-        if follow and mode == "glob":
-            msg = "follow mode is not supported for glob sources"
-            raise NotImplementedError(msg)
-
         self._offset: SingleFileOffset | GlobOffset = self._load_offset()
+        # Per-file byte positions used during glob+follow tailing
+        self._file_positions: dict[str, int] = {}
 
     def _load_offset(self) -> SingleFileOffset | GlobOffset:
         """Load offset from storage, returning the appropriate typed offset."""
@@ -68,7 +67,10 @@ class Consumer:
         if self._mode == "single-file":
             yield from self._iterate_single_file()
         elif self._mode == "glob":
-            yield from self._iterate_glob()
+            if self._follow:
+                yield from self._iterate_glob_follow()
+            else:
+                yield from self._iterate_glob()
         else:
             raise ValueError(f"Unknown consumer mode: {self._mode!r}")
 
@@ -114,6 +116,39 @@ class Consumer:
             if event is not None:
                 yield event
 
+    def _catch_up_glob(self, files: list[str]) -> None:
+        """Read all unread events from glob-matched files, updating offset.
+
+        Shared between batch glob and glob+follow modes. During follow mode,
+        also populates _file_positions for subsequent tailing.
+        """
+        assert isinstance(self._offset, GlobOffset)
+        start_file_index = self._offset.file_index
+        start_byte_offset = self._offset.byte_offset
+
+        for i, filepath in enumerate(files):
+            if i < start_file_index:
+                # Still record position for follow mode
+                if self._follow:
+                    self._file_positions[filepath] = Path(filepath).stat().st_size
+                continue
+
+            with open(filepath) as f:
+                if i == start_file_index:
+                    f.seek(start_byte_offset)
+
+                yield from self._read_lines(f)
+
+                end_pos = f.tell()
+                if self._follow:
+                    self._file_positions[filepath] = end_pos
+
+                # After reading this file, update offset to next file
+                if i == len(files) - 1:
+                    self._offset = GlobOffset(file_index=i, byte_offset=end_pos)
+                else:
+                    self._offset = GlobOffset(file_index=i + 1, byte_offset=0)
+
     def _iterate_glob(self):
         """Read events across multiple files matched by glob pattern."""
         files = sorted(glob_module.glob(self._path))
@@ -124,29 +159,77 @@ class Consumer:
                 self._topic,
                 self._group,
             )
-        assert isinstance(self._offset, GlobOffset)
-        start_file_index = self._offset.file_index
-        start_byte_offset = self._offset.byte_offset
-
-        for i, filepath in enumerate(files):
-            if i < start_file_index:
-                continue
-
-            with open(filepath) as f:
-                if i == start_file_index:
-                    f.seek(start_byte_offset)
-
-                yield from self._read_lines(f)
-
-                # After reading this file, update offset to next file
-                if i == len(files) - 1:
-                    # Last file — save position within it
-                    self._offset = GlobOffset(file_index=i, byte_offset=f.tell())
-                else:
-                    # Move to next file, start at byte 0
-                    self._offset = GlobOffset(file_index=i + 1, byte_offset=0)
-
+        yield from self._catch_up_glob(files)
         self._save_offset()
+
+    def _iterate_glob_follow(self):
+        """Catch up on existing glob files, then tail for changes and new files."""
+        import queue
+
+        from watchdog.events import FileSystemEventHandler
+        from watchdog.observers import Observer
+
+        assert isinstance(self._offset, GlobOffset)
+
+        # Phase 1: catch-up on existing files
+        files = sorted(glob_module.glob(self._path))
+        yield from self._catch_up_glob(files)
+        self._save_offset()
+
+        # Phase 2: tail using watchdog on the parent directory
+        glob_pattern = self._path
+        watch_dir = str(Path(self._path).parent)
+        event_queue = queue.Queue()
+
+        class GlobHandler(FileSystemEventHandler):
+            def on_modified(self, event):
+                if not event.is_directory and fnmatch.fnmatch(event.src_path, glob_pattern):
+                    event_queue.put(("modified", event.src_path))
+
+            def on_created(self, event):
+                if not event.is_directory and fnmatch.fnmatch(event.src_path, glob_pattern):
+                    event_queue.put(("created", event.src_path))
+
+        observer = Observer()
+        observer.schedule(GlobHandler(), watch_dir, recursive=False)
+        observer.start()
+        self._observer = observer
+
+        try:
+            while not self._closed:
+                try:
+                    action, filepath = event_queue.get(timeout=0.5)
+                except queue.Empty:
+                    continue
+
+                # Drain the queue to batch process notifications
+                pending = [(action, filepath)]
+                while not event_queue.empty():
+                    try:
+                        pending.append(event_queue.get_nowait())
+                    except queue.Empty:
+                        break
+
+                for _action, filepath in pending:
+                    known_pos = self._file_positions.get(filepath, 0)
+
+                    with open(filepath) as f:
+                        f.seek(known_pos)
+                        yield from self._read_lines(f)
+                        self._file_positions[filepath] = f.tell()
+
+                    # Update GlobOffset: find this file's index in the sorted list
+                    all_files = sorted(self._file_positions.keys())
+                    file_idx = all_files.index(filepath)
+                    self._offset = GlobOffset(
+                        file_index=file_idx,
+                        byte_offset=self._file_positions[filepath],
+                    )
+
+                self._save_offset()
+        finally:
+            observer.stop()
+            observer.join()
 
     def _iterate_follow(self, f, path):
         """Tail a file using watchdog for filesystem events."""
@@ -197,7 +280,13 @@ class Consumer:
         try:
             # Save offset from current file position if still open
             if self._file_handle is not None and not self._file_handle.closed:
-                self._offset = SingleFileOffset(byte_offset=self._file_handle.tell())
+                if isinstance(self._offset, GlobOffset):
+                    self._offset = GlobOffset(
+                        file_index=self._offset.file_index,
+                        byte_offset=self._file_handle.tell(),
+                    )
+                else:
+                    self._offset = SingleFileOffset(byte_offset=self._file_handle.tell())
                 self._save_offset()
         finally:
             if self._observer is not None:

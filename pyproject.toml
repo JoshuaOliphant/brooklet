@@ -40,9 +40,32 @@ select = ["E", "F", "I", "N", "W", "UP", "B", "C4", "SIM"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "bdd: BDD acceptance tests",
+    "ac-1: AC-1 Produce creates topic directory and writes event",
+    "ac-2: AC-2 Produce auto-injects envelope fields",
+    "ac-3: AC-3 Produce assigns monotonic sequence numbers",
+    "ac-4: AC-4 Produce preserves existing envelope fields",
+    "ac-5: AC-5 Produce appends atomically",
+    "ac-6: AC-6 Produce auto-registers topic in the registry",
+    "ac-7: AC-7 Produce and consume roundtrip",
+    "ac-8: AC-8 Produce with source parameter",
+    "ac-9: AC-9 Produce errors on name collision",
+    "ac-10: AC-10 Path-style topic names create nested directories",
+    "ac-11: AC-11 Topic names with path traversal are rejected",
+    "ac-12: AC-12 Producing non-dict data raises TypeError",
+    "ac-13: AC-13 Glob follow detects new lines in existing files",
+    "ac-14: AC-14 Glob follow detects new files matching the pattern",
+    "ac-15: AC-15 Glob follow maintains offset across restarts",
+    "ac-16: AC-16 Glob follow catches up before tailing",
+]
+
+[tool.pytest-bdd]
+bdd_features_base_dir = "tests/bdd/features/"
 
 [dependency-groups]
 dev = [
+    "pytest-bdd>=8.1.0",
     "pytest>=8.0",
     "pytest-cov>=6.0",
     "ruff>=0.9",
