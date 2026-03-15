@@ -247,3 +247,39 @@ class TestConsumerFollow:
 
         assert len(events_seen) == 1
         assert events_seen[0]["type"] == "new_after_restart"
+
+    def test_glob_catch_up_survives_missing_file(self, tmp_path, offsets_dir):
+        """Catch-up skips files that vanish between glob and open."""
+        d = tmp_path / "sessions"
+        d.mkdir()
+        (d / "a.jsonl").write_text(json.dumps({"type": "a1"}) + "\n")
+        (d / "b.jsonl").write_text(json.dumps({"type": "b1"}) + "\n")
+        (d / "c.jsonl").write_text(json.dumps({"type": "c1"}) + "\n")
+
+        # Simulate a file list that includes a file that will be deleted
+        import glob as glob_module
+        from unittest.mock import patch
+
+        real_files = sorted(glob_module.glob(str(d / "*.jsonl")))
+        assert len(real_files) == 3
+
+        # Delete b.jsonl after glob but before open
+        (d / "b.jsonl").unlink()
+
+        consumer = Consumer(
+            path=str(d / "*.jsonl"),
+            mode="glob",
+            group="test",
+            topic="glob-missing",
+            offsets_dir=offsets_dir,
+        )
+        # Patch glob to return the original list (including deleted file)
+        with patch.object(glob_module, "glob", return_value=real_files):
+            events = list(consumer)
+        consumer.close()
+
+        # Should get a1 and c1, skipping the missing b.jsonl
+        types = [e["type"] for e in events]
+        assert "a1" in types
+        assert "c1" in types
+        assert "b1" not in types

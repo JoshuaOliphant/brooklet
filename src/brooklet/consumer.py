@@ -130,10 +130,30 @@ class Consumer:
             if i < start_file_index:
                 # Still record position for follow mode
                 if self._follow:
-                    self._file_positions[filepath] = Path(filepath).stat().st_size
+                    try:
+                        self._file_positions[filepath] = Path(filepath).stat().st_size
+                    except OSError as e:
+                        logger.warning(
+                            "Cannot stat skipped file %s (topic=%s, group=%s): %s",
+                            filepath, self._topic, self._group, e,
+                        )
                 continue
 
-            with open(filepath) as f:
+            try:
+                f = open(filepath)  # noqa: SIM115
+            except OSError as e:
+                logger.warning(
+                    "Cannot open file %s during catch-up (topic=%s, group=%s): %s",
+                    filepath, self._topic, self._group, e,
+                )
+                # Advance offset past this file
+                if i == len(files) - 1:
+                    self._offset = GlobOffset(file_index=i, byte_offset=0)
+                else:
+                    self._offset = GlobOffset(file_index=i + 1, byte_offset=0)
+                continue
+
+            try:
                 if i == start_file_index:
                     f.seek(start_byte_offset)
 
@@ -148,6 +168,8 @@ class Consumer:
                     self._offset = GlobOffset(file_index=i, byte_offset=end_pos)
                 else:
                     self._offset = GlobOffset(file_index=i + 1, byte_offset=0)
+            finally:
+                f.close()
 
     def _iterate_glob(self):
         """Read events across multiple files matched by glob pattern."""
@@ -213,10 +235,18 @@ class Consumer:
                 for _action, filepath in pending:
                     known_pos = self._file_positions.get(filepath, 0)
 
-                    with open(filepath) as f:
-                        f.seek(known_pos)
-                        yield from self._read_lines(f)
-                        self._file_positions[filepath] = f.tell()
+                    try:
+                        with open(filepath) as f:
+                            f.seek(known_pos)
+                            yield from self._read_lines(f)
+                            self._file_positions[filepath] = f.tell()
+                    except OSError as e:
+                        logger.warning(
+                            "Skipping file %s during glob+follow "
+                            "(topic=%s, group=%s): %s",
+                            filepath, self._topic, self._group, e,
+                        )
+                        continue
 
                     # Update GlobOffset: find this file's index in the sorted list
                     all_files = sorted(self._file_positions.keys())
@@ -228,6 +258,7 @@ class Consumer:
 
                 self._save_offset()
         finally:
+            self._save_offset()
             observer.stop()
             observer.join()
 
