@@ -2,12 +2,13 @@
 # ABOUTME: Uses session_dir fixture and scout module for end-to-end acceptance tests
 
 import os
+import time
 from io import StringIO
 
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from brooklet.contrib.scout import (
+from brooklet.contrib.claude_analytics import (
     CumulativeStats,
     render_cumulative_block,
     render_session_block,
@@ -195,7 +196,11 @@ def when_scout_rich(ctx):
 
 @when("scout scans with the current flag")
 def when_scout_current(ctx):
-    """Run scout with --current flag."""
+    """Run scout with --current flag. Ages all but the most recent file."""
+    files = sorted(ctx["session_dir"].glob("*.jsonl"), key=lambda p: p.stat().st_mtime)
+    old_time = time.time() - 7200  # 2 hours ago
+    for f in files[:-1]:
+        os.utime(f, (old_time, old_time))
     ctx["stats"] = list(scan_sessions(str(ctx["session_dir"]), current=True))
 
 
@@ -203,6 +208,9 @@ def when_scout_current(ctx):
 def when_scout_identifies_current(ctx):
     """Verify scout can identify the most recent session file."""
     files = sorted(ctx["session_dir"].glob("*.jsonl"), key=lambda p: p.stat().st_mtime)
+    old_time = time.time() - 7200  # 2 hours ago
+    for f in files[:-1]:
+        os.utime(f, (old_time, old_time))
     ctx["current_file"] = files[-1]
     ctx["stats"] = list(scan_sessions(str(ctx["session_dir"]), current=True))
 

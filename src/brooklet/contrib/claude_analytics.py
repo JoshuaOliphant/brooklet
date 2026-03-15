@@ -1,4 +1,4 @@
-# ABOUTME: Scout analytics module — scans Claude Code session JSONL files for usage stats
+# ABOUTME: Claude Code analytics module — scans session JSONL files for usage stats
 # ABOUTME: Exercises brooklet consume() with glob mode and produce() for JSONL output
 
 from __future__ import annotations
@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from collections import Counter
 from collections.abc import Iterator
 from dataclasses import dataclass, field
@@ -17,6 +18,8 @@ import brooklet
 # ---------------------------------------------------------------------------
 # Layer 1: Parsing (pure functions, no I/O)
 # ---------------------------------------------------------------------------
+
+IDLE_GAP_THRESHOLD = 300  # 5 minutes in seconds — gaps longer than this are idle time
 
 TOKEN_FIELDS = {
     "input_tokens": "input",
@@ -78,12 +81,14 @@ class SessionStats:
     session_id: str
     event_count: int = 0
     duration_s: float = 0.0
+    active_duration_s: float = 0.0
     model: str | None = None
     tokens: dict[str, int] = field(
         default_factory=lambda: {"input": 0, "output": 0, "cache_read": 0, "cache_create": 0}
     )
     tools: dict[str, int] = field(default_factory=dict)
     start_time: str | None = None
+    removed: bool = False
 
     def to_dict(self) -> dict:
         """Convert to a plain dict for JSONL serialization."""
@@ -91,6 +96,7 @@ class SessionStats:
             "session_id": self.session_id,
             "event_count": self.event_count,
             "duration_s": self.duration_s,
+            "active_duration_s": self.active_duration_s,
             "model": self.model,
             "tokens": dict(self.tokens),
             "tools": dict(self.tools),
@@ -134,7 +140,7 @@ def aggregate_session(session_id: str, events: list[dict]) -> SessionStats:
 
     stats.model = model
 
-    # Duration: max - min timestamp
+    # Duration: max - min timestamp, plus active time (excluding idle gaps)
     if len(timestamps) >= 2:
         parsed = []
         for ts in timestamps:
@@ -146,7 +152,14 @@ def aggregate_session(session_id: str, events: list[dict]) -> SessionStats:
             except ValueError:
                 continue
         if len(parsed) >= 2:
-            stats.duration_s = (max(parsed) - min(parsed)).total_seconds()
+            sorted_times = sorted(parsed)
+            stats.duration_s = (sorted_times[-1] - sorted_times[0]).total_seconds()
+            active_time = 0.0
+            for i in range(1, len(sorted_times)):
+                gap = (sorted_times[i] - sorted_times[i - 1]).total_seconds()
+                if gap < IDLE_GAP_THRESHOLD:
+                    active_time += gap
+            stats.active_duration_s = active_time
 
     if timestamps:
         stats.start_time = timestamps[0]
@@ -202,6 +215,7 @@ def scan_sessions(
     path: str,
     follow: bool = False,
     current: bool = False,
+    window_minutes: int = 30,
 ) -> Iterator[SessionStats]:
     """Scan session files and yield per-session stats.
 
@@ -211,7 +225,9 @@ def scan_sessions(
     Args:
         path: Directory containing session JSONL files.
         follow: If True, tail for new sessions via glob+follow.
-        current: If True, only process the most recently modified session.
+        current: If True, only process files modified within window_minutes.
+        window_minutes: Time window for --current mode (default 30).
+            Use 0 for single most recent file (backward compat).
     """
     session_dir = Path(path)
     if not session_dir.is_dir():
@@ -219,35 +235,84 @@ def scan_sessions(
         return
 
     if current:
-        # Find the most recently modified .jsonl file
         def _safe_mtime(p: Path) -> float:
             try:
                 return p.stat().st_mtime
-            except OSError:
+            except OSError as e:
+                print(f"Warning: cannot stat {p}: {e}", file=sys.stderr)
                 return 0.0
 
         jsonl_files = sorted(session_dir.glob("*.jsonl"), key=_safe_mtime)
         if not jsonl_files:
             print("No active session found", file=sys.stderr)
             return
-        target = jsonl_files[-1]
-        session_id = _session_id_from_path(str(target))
+
+        if window_minutes == 0:
+            # Backward compat: single most recent file
+            active_files = [jsonl_files[-1]]
+        else:
+            cutoff = time.time() - (window_minutes * 60)
+            active_files = [f for f in jsonl_files if _safe_mtime(f) > cutoff]
+            active_files = sorted(active_files, key=_safe_mtime)
+            if not active_files:
+                print("No active session found", file=sys.stderr)
+                return
 
         if follow:
-            # Use brooklet single-file follow for live tailing
-            stream = brooklet.open(str(session_dir))
-            stream.register("current-session", str(target), "single-file")
-            events = []
-            with stream.consume("current-session", group="scout-current", follow=True) as consumer:
-                for raw_event in consumer:
-                    parsed = parse_session_event(raw_event)
-                    if parsed is not None:
-                        events.append(parsed)
-                        yield aggregate_session(session_id, events)
+            # Poll-based follow: re-scan for new/modified files within the
+            # window and re-parse changed ones. Detects new sessions that
+            # appear after initial scan (new chats, resumed sessions).
+            # Sessions that fall out of the window are yielded with removed=True.
+            file_sizes: dict[str, int] = {}
+            session_events: dict[str, list[dict]] = {}
+            known_session_ids: set[str] = set()
+
+            while True:
+                # Re-scan for active files within the window
+                all_jsonl = sorted(session_dir.glob("*.jsonl"), key=_safe_mtime)
+                if window_minutes == 0:
+                    scan_files = [all_jsonl[-1]] if all_jsonl else []
+                else:
+                    cutoff = time.time() - (window_minutes * 60)
+                    scan_files = [f for f in all_jsonl if _safe_mtime(f) > cutoff]
+
+                current_sids: set[str] = set()
+                changed = False
+
+                for target in scan_files:
+                    sid = _session_id_from_path(str(target))
+                    current_sids.add(sid)
+                    try:
+                        current_size = target.stat().st_size
+                    except OSError:
+                        continue
+                    prev_size = file_sizes.get(str(target), 0)
+
+                    if current_size != prev_size:
+                        file_sizes[str(target)] = current_size
+                        events = _parse_file_events(str(target))
+                        if events:
+                            session_events[sid] = events
+                            yield aggregate_session(sid, events)
+                            changed = True
+
+                # Yield removal signals for sessions that left the window
+                removed_sids = known_session_ids - current_sids
+                for sid in removed_sids:
+                    yield SessionStats(session_id=sid, removed=True)
+                    session_events.pop(sid, None)
+                    changed = True
+
+                known_session_ids = current_sids
+
+                if not changed:
+                    time.sleep(2)
         else:
-            events = _parse_file_events(str(target))
-            if events:
-                yield aggregate_session(session_id, events)
+            for target in active_files:
+                session_id = _session_id_from_path(str(target))
+                events = _parse_file_events(str(target))
+                if events:
+                    yield aggregate_session(session_id, events)
         return
 
     # Glob mode: process all session files
@@ -308,6 +373,7 @@ class CumulativeStats:
     session_count: int = 0
     total_events: int = 0
     total_duration_s: float = 0.0
+    total_active_duration_s: float = 0.0
     tokens: dict[str, int] = field(
         default_factory=lambda: {"input": 0, "output": 0, "cache_read": 0, "cache_create": 0}
     )
@@ -319,6 +385,7 @@ class CumulativeStats:
         self.session_count += 1
         self.total_events += stats.event_count
         self.total_duration_s += stats.duration_s
+        self.total_active_duration_s += stats.active_duration_s
         for key, val in stats.tokens.items():
             self.tokens[key] = self.tokens.get(key, 0) + val
         self.tools.update(stats.tools)
@@ -347,9 +414,13 @@ def render_session_block(stats: SessionStats) -> str:
     lines = []
     ts_display = stats.start_time[:16].replace("T", " ") if stats.start_time else "unknown"
     lines.append(f"--- session {stats.session_id[:8]} ({ts_display}) ---")
+    duration_str = _format_duration(stats.duration_s)
+    # Show active time suffix when it differs from wall-clock by >10%
+    if stats.duration_s > 0 and stats.active_duration_s < stats.duration_s * 0.9:
+        duration_str += f" (active: {_format_duration(stats.active_duration_s)})"
     lines.append(
         f"  events: {stats.event_count}  "
-        f"duration: {_format_duration(stats.duration_s)}  "
+        f"duration: {duration_str}  "
         f"model: {stats.model or 'unknown'}"
     )
 
@@ -394,9 +465,14 @@ def render_cumulative_block(cumulative: CumulativeStats) -> str:
     if cumulative.session_count > 0:
         avg_events = cumulative.total_events / cumulative.session_count
         avg_duration = cumulative.total_duration_s / cumulative.session_count
+        duration_str = f"avg={_format_duration(avg_duration)} duration"
+        if (cumulative.total_duration_s > 0
+                and cumulative.total_active_duration_s < cumulative.total_duration_s * 0.9):
+            duration_str += (
+                f" (active: {_format_duration(cumulative.total_active_duration_s)})"
+            )
         lines.append(
-            f"  sessions: avg={avg_events:.0f} events, "
-            f"avg={_format_duration(avg_duration)} duration"
+            f"  sessions: avg={avg_events:.0f} events, {duration_str}"
         )
 
     return "\n".join(lines)
@@ -411,6 +487,8 @@ def render_streaming(stats_iter: Iterator[SessionStats], output_file=None) -> st
     output_lines = []
 
     for stats in stats_iter:
+        if stats.removed:
+            continue
         cumulative.update(stats)
         block = render_session_block(stats)
         output_lines.append(block)
@@ -455,10 +533,13 @@ def render_rich(stats_iter: Iterator[SessionStats]) -> None:
                 f"{name}({c})" for name, c in
                 sorted(s.tools.items(), key=lambda x: x[1], reverse=True)[:3]
             )
+            dur_str = _format_duration(s.duration_s)
+            if s.duration_s > 0 and s.active_duration_s < s.duration_s * 0.9:
+                dur_str += f" ({_format_duration(s.active_duration_s)})"
             table.add_row(
                 s.session_id[:8],
                 str(s.event_count),
-                _format_duration(s.duration_s),
+                dur_str,
                 s.model or "?",
                 _format_number(s.tokens.get("input", 0)),
                 _format_number(s.tokens.get("output", 0)),
@@ -485,7 +566,17 @@ def render_rich(stats_iter: Iterator[SessionStats]) -> None:
 
     with Live(build_table(), console=console, refresh_per_second=4) as live:
         for stats in stats_iter:
-            if stats.session_id in session_index:
+            if stats.removed:
+                # Remove session from the table
+                if stats.session_id in session_index:
+                    idx = session_index.pop(stats.session_id)
+                    sessions.pop(idx)
+                    # Rebuild index since positions shifted
+                    session_index = {s.session_id: i for i, s in enumerate(sessions)}
+                    cumulative = CumulativeStats()
+                    for s in sessions:
+                        cumulative.update(s)
+            elif stats.session_id in session_index:
                 # Replace existing entry — same session with updated stats
                 idx = session_index[stats.session_id]
                 sessions[idx] = stats
@@ -519,7 +610,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--current",
         action="store_true",
-        help="Only process the most recently modified session",
+        help="Only process sessions modified within the --window time range",
     )
     parser.add_argument(
         "--follow",
@@ -530,6 +621,13 @@ def main(argv: list[str] | None = None) -> None:
         "--rich",
         action="store_true",
         help="Display a live-updating rich dashboard",
+    )
+    parser.add_argument(
+        "--window",
+        type=int,
+        default=30,
+        metavar="MINUTES",
+        help="Time window for --current mode (default: 30 minutes)",
     )
     parser.add_argument(
         "--output",
@@ -543,6 +641,7 @@ def main(argv: list[str] | None = None) -> None:
         path=args.path,
         follow=args.follow,
         current=args.current,
+        window_minutes=args.window,
     )
 
     # If --output is specified, wrap the iterator to produce events
@@ -557,7 +656,10 @@ def main(argv: list[str] | None = None) -> None:
 
         stats_iter = producing_iter()
 
-    if args.rich:
-        render_rich(stats_iter)
-    else:
-        render_streaming(stats_iter)
+    try:
+        if args.rich:
+            render_rich(stats_iter)
+        else:
+            render_streaming(stats_iter)
+    except KeyboardInterrupt:
+        pass

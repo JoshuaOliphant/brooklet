@@ -28,7 +28,7 @@ rich = [
 ]
 
 [project.scripts]
-brooklet-scout = "brooklet.contrib.scout:main"
+brooklet-scout = "brooklet.contrib.claude_analytics:main"
 
 [project.urls]
 Repository = "https://github.com/joshuaoliphant/brooklet"
