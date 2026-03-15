@@ -2,7 +2,10 @@
 # ABOUTME: Adds _ts, _seq, _src metadata fields without clobbering existing values
 
 import json
+import logging
 from datetime import UTC, datetime
+
+logger = logging.getLogger("brooklet")
 
 
 def wrap(line: str, seq: int, source: str | None = None) -> dict | None:
@@ -26,7 +29,8 @@ def wrap(line: str, seq: int, source: str | None = None) -> dict | None:
 
     try:
         event = json.loads(line)
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as e:
+        logger.warning("Skipping malformed JSON line (seq=%d): %s — %s", seq, line[:80], e)
         return None
 
     # _ts: auto-set if missing, preserve if present

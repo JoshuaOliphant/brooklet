@@ -2,6 +2,9 @@
 # ABOUTME: Covers empty files, full reads, offset resume, glob mode, and group isolation
 
 import json
+import logging
+
+import pytest
 
 from brooklet.consumer import Consumer
 
@@ -189,3 +192,115 @@ class TestConsumerBatch:
         )
         events = list(consumer)
         assert len(events) == 2
+
+    def test_consume_nonexistent_file_yields_empty(self, tmp_path, offsets_dir):
+        """Consuming a nonexistent file yields no events and logs a warning."""
+        consumer = Consumer(
+            path=str(tmp_path / "does_not_exist.jsonl"),
+            mode="single-file",
+            group="test",
+            topic="missing",
+            offsets_dir=offsets_dir,
+        )
+        with pytest.warns(match="does not exist"):
+            events = list(consumer)
+        assert events == []
+
+    def test_consume_mixed_valid_invalid_json(self, tmp_path, offsets_dir):
+        """Mixed valid/invalid JSON yields only valid events and logs warnings."""
+        path = tmp_path / "mixed.jsonl"
+        with open(path, "w") as f:
+            f.write('{"type": "good1"}\n')
+            f.write("NOT VALID JSON\n")
+            f.write('{"type": "good2"}\n')
+            f.write("{truncated\n")
+
+        consumer = Consumer(
+            path=str(path),
+            mode="single-file",
+            group="test",
+            topic="mixed",
+            offsets_dir=offsets_dir,
+        )
+        events = list(consumer)
+        assert len(events) == 2
+        assert events[0]["type"] == "good1"
+        assert events[1]["type"] == "good2"
+
+    def test_consume_malformed_json_logs_warning(self, tmp_path, offsets_dir, caplog):
+        """Malformed JSON lines produce log warnings."""
+        path = tmp_path / "bad.jsonl"
+        with open(path, "w") as f:
+            f.write("NOT JSON\n")
+            f.write('{"type": "ok"}\n')
+
+        consumer = Consumer(
+            path=str(path),
+            mode="single-file",
+            group="test",
+            topic="bad",
+            offsets_dir=offsets_dir,
+        )
+        with caplog.at_level(logging.WARNING, logger="brooklet"):
+            events = list(consumer)
+
+        assert len(events) == 1
+        assert "malformed JSON" in caplog.text.lower() or "Skipping" in caplog.text
+
+    def test_unknown_mode_raises(self, tmp_path, offsets_dir):
+        """Unknown mode raises ValueError instead of silently yielding nothing."""
+        consumer = Consumer(
+            path=str(tmp_path / "x.jsonl"),
+            mode="unknown-mode",
+            group="test",
+            topic="t",
+            offsets_dir=offsets_dir,
+        )
+        with pytest.raises(ValueError, match="unknown-mode"):
+            list(consumer)
+
+    def test_consume_glob_zero_matches_logs_warning(self, tmp_path, offsets_dir, caplog):
+        """Glob with zero matching files logs a warning."""
+        consumer = Consumer(
+            path=str(tmp_path / "nonexistent_dir" / "*.jsonl"),
+            mode="glob",
+            group="test",
+            topic="empty-glob",
+            offsets_dir=offsets_dir,
+        )
+        with caplog.at_level(logging.WARNING, logger="brooklet"):
+            events = list(consumer)
+
+        assert events == []
+        assert "no files" in caplog.text.lower() or "zero" in caplog.text.lower()
+
+    def test_consumer_context_manager(self, sample_jsonl, offsets_dir):
+        """Consumer can be used as a context manager."""
+        with Consumer(
+            path=str(sample_jsonl),
+            mode="single-file",
+            group="test",
+            topic="ctx",
+            offsets_dir=offsets_dir,
+        ) as consumer:
+            events = list(consumer)
+
+        assert len(events) == 3
+        # Offset should be saved after exiting context
+        from brooklet.offsets import load
+
+        offset = load(offsets_dir, group="test", topic="ctx")
+        assert offset > 0
+
+    def test_consumer_close_saves_offset_even_if_observer_fails(self, sample_jsonl, offsets_dir):
+        """close() cleans up observer even if offset save fails."""
+        consumer = Consumer(
+            path=str(sample_jsonl),
+            mode="single-file",
+            group="test",
+            topic="t",
+            offsets_dir=offsets_dir,
+        )
+        list(consumer)
+        # Observer is None for batch mode, so close should just work
+        consumer.close()

@@ -1,6 +1,8 @@
 # ABOUTME: Tests for the offset persistence module
 # ABOUTME: Verifies save/load roundtrip, defaults, directory creation, and atomic writes
 
+import pytest
+
 from brooklet.offsets import load, save
 
 
@@ -55,3 +57,34 @@ class TestOffsets:
         offset_file = offsets_dir / "g-t.json"
         data = json.loads(offset_file.read_text())
         assert data["offset"] == 99
+
+    def test_atomic_write_cleanup_on_replace_failure(self, offsets_dir, monkeypatch):
+        """Error handler does not raise secondary OSError on closed fd."""
+        import os as os_mod
+
+        def failing_replace(src, dst):
+            raise OSError("simulated replace failure")
+
+        monkeypatch.setattr(os_mod, "replace", failing_replace)
+
+        with pytest.raises(OSError, match="simulated replace failure"):
+            save(offsets_dir, group="g", topic="t", offset=42)
+
+    def test_corrupt_offset_file_raises_with_context(self, offsets_dir):
+        """Corrupted offset file gives actionable error message."""
+        offset_file = offsets_dir / "g-t.json"
+        offset_file.write_text("NOT VALID JSON{{{")
+
+        with pytest.raises(ValueError, match="Corrupt offset file"):
+            load(offsets_dir, group="g", topic="t")
+
+    def test_name_validation_rejects_path_separators(self, offsets_dir):
+        """Group/topic names with path separators are rejected."""
+        with pytest.raises(ValueError, match="safe characters"):
+            save(offsets_dir, group="../etc", topic="t", offset=1)
+
+        with pytest.raises(ValueError, match="safe characters"):
+            save(offsets_dir, group="g", topic="../../passwd", offset=1)
+
+        with pytest.raises(ValueError, match="safe characters"):
+            load(offsets_dir, group="../etc", topic="t")

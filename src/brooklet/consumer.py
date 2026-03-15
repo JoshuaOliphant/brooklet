@@ -2,10 +2,14 @@
 # ABOUTME: Reads JSONL lines from registered sources with offset tracking
 
 import glob as glob_module
+import logging
+import warnings
 from pathlib import Path
 
 from brooklet.envelope import wrap
 from brooklet.offsets import load, save
+
+logger = logging.getLogger("brooklet")
 
 
 class Consumer:
@@ -35,12 +39,12 @@ class Consumer:
         self._seq = 0
         self._closed = False
         self._file_handle = None
+        self._observer = None
 
         if follow and mode == "glob":
-            msg = "follow mode is not supported for glob sources in v0.1"
+            msg = "follow mode is not supported for glob sources"
             raise NotImplementedError(msg)
 
-        # Load saved offset
         self._offset_data = self._load_offset()
 
     def _load_offset(self) -> dict:
@@ -51,10 +55,8 @@ class Consumer:
                 return {"file_index": 0, "byte_offset": 0}
             return {"byte_offset": 0}
 
-        # Stored as JSON string in the offset int — decode it
-        # Actually, we store composite offsets as JSON-encoded strings
-        # For simplicity, use a scheme: for single-file, offset is just byte_offset
-        # For glob, we encode as file_index * 10**18 + byte_offset
+        # Composite offset encoding: file_index * 10**18 + byte_offset
+        # For single-file mode, raw is just the byte_offset directly
         if self._mode == "glob":
             file_index = raw // (10**18)
             byte_offset = raw % (10**18)
@@ -78,11 +80,18 @@ class Consumer:
             yield from self._iterate_single_file()
         elif self._mode == "glob":
             yield from self._iterate_glob()
+        else:
+            raise ValueError(f"Unknown consumer mode: {self._mode!r}")
 
     def _iterate_single_file(self):
         """Read events from a single JSONL file."""
         path = Path(self._path).expanduser()
         if not path.exists():
+            warnings.warn(
+                f"Source file does not exist: {path} "
+                f"(topic={self._topic!r}, group={self._group!r})",
+                stacklevel=2,
+            )
             return
 
         f = open(path)  # noqa: SIM115
@@ -118,6 +127,13 @@ class Consumer:
     def _iterate_glob(self):
         """Read events across multiple files matched by glob pattern."""
         files = sorted(glob_module.glob(self._path))
+        if not files:
+            logger.warning(
+                "Glob pattern matched no files: %s (topic=%s, group=%s)",
+                self._path,
+                self._topic,
+                self._group,
+            )
         start_file_index = self._offset_data.get("file_index", 0)
         start_byte_offset = self._offset_data.get("byte_offset", 0)
 
@@ -187,11 +203,19 @@ class Consumer:
         """Stop the consumer and save the current offset."""
         self._closed = True
 
-        # Save offset from current file position if still open
-        if self._file_handle is not None and not self._file_handle.closed:
-            self._offset_data["byte_offset"] = self._file_handle.tell()
-            self._save_offset(self._offset_data)
+        try:
+            # Save offset from current file position if still open
+            if self._file_handle is not None and not self._file_handle.closed:
+                self._offset_data["byte_offset"] = self._file_handle.tell()
+                self._save_offset(self._offset_data)
+        finally:
+            if self._observer is not None:
+                self._observer.stop()
+                self._observer.join()
 
-        if hasattr(self, "_observer"):
-            self._observer.stop()
-            self._observer.join()
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+        return False

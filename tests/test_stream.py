@@ -79,3 +79,16 @@ class TestStream:
 
         assert len(events1) == 1
         assert len(events2) == 0
+
+    def test_consume_sets_src_from_topic(self, tmp_stream_dir, tmp_path):
+        """Events consumed via Stream have _src set to the topic name."""
+        jsonl_path = tmp_path / "events.jsonl"
+        with open(jsonl_path, "w") as f:
+            f.write(json.dumps({"type": "hello"}) + "\n")
+
+        stream = Stream(str(tmp_stream_dir))
+        stream.register("my-topic", path=str(jsonl_path), mode="single-file")
+
+        events = list(stream.consume("my-topic", group="test"))
+        assert len(events) == 1
+        assert events[0]["_src"] == "my-topic"

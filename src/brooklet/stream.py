@@ -57,6 +57,7 @@ class Stream:
             group=group,
             topic=topic,
             offsets_dir=self._offsets_dir,
+            source=topic,
             follow=follow,
         )
 
