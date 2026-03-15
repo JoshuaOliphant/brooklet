@@ -4,11 +4,13 @@ The SQLite of event streaming — consumer coordination on top of JSONL files.
 
 Brooklet adds **offsets, tailing, and topic discovery** to the append-only JSONL files that tools like Claude Code, structlog, and OpenTelemetry already produce. It doesn't replace your files or add a broker — it just makes them consumable as event streams.
 
-## Quickstart
+## Install
 
 ```bash
 pip install brooklet   # or: uv add brooklet
 ```
+
+## Quickstart
 
 ```python
 import brooklet
@@ -31,8 +33,6 @@ for event in stream.consume("claude-history", group="my-app"):
 ### Follow mode (live tailing)
 
 ```python
-import threading
-
 # Tail a file for new events (like `tail -f` but with offsets)
 consumer = stream.consume("claude-history", group="watcher", follow=True)
 for event in consumer:
@@ -45,34 +45,83 @@ for event in consumer:
 ### Glob mode (multiple files)
 
 ```python
+# Register a glob pattern — all matching files are consumed in sorted order
 stream.register("sessions", path="~/.claude/projects/*/*.jsonl", mode="glob")
 for event in stream.consume("sessions", group="analytics"):
     print(event["_seq"], event.get("type"))
+
+# Glob + follow detects both new lines in existing files AND new files
+for event in stream.consume("sessions", group="live", follow=True):
+    print(f"New event from {event.get('sessionId', 'unknown')}")
+```
+
+### Produce (derived topics)
+
+```python
+# Consumers that transform data can produce to local topics
+stream.produce("scout/stats", {"type": "session-stats", "tokens": 12345}, source="scout")
+
+# Produced topics are auto-registered and immediately consumable
+for event in stream.consume("scout/stats", group="dashboard"):
+    print(event)  # Has _ts, _seq, _src envelope fields
 ```
 
 ## Envelope
 
-Every event gets thin metadata auto-injected on read:
+Every event gets thin metadata auto-injected:
 
 | Field | Description | Behavior |
 |-------|-------------|----------|
 | `_ts` | ISO 8601 timestamp | Set if missing, preserved if present |
 | `_seq` | Monotonic sequence number | Always set by brooklet |
-| `_src` | Producer identifier | Set if `source` param provided |
+| `_src` | Producer identifier | Set from `source` param or topic name |
 
 The `_` prefix avoids collisions with any producer's payload.
 
 ## Key Concepts
 
-- **No `produce()`** — `echo '{"type":"hello"}' >> topic.jsonl` is the universal producer API
+- **`echo >>` is the universal producer API** — external tools write JSONL, brooklet reads it
+- **`produce()` for derived data** — consumers that transform and re-emit use `stream.produce()`
 - **Consumer groups** — independent offset tracking per group name
 - **Source registration** — maps external file paths to topic names
 - **Byte offsets** — O(1) resume, no line scanning on restart
+- **Path-style topics** — `"scout/session-stats"` creates nested directories
+
+## Scout (built-in analytics)
+
+Brooklet includes `brooklet-scout`, a CLI tool that analyzes Claude Code session JSONL files:
+
+```bash
+# Scan all sessions for a project
+brooklet-scout ~/.claude/projects/-Users-you-your-project/
+
+# Current session only
+brooklet-scout ~/.claude/projects/-Users-you-your-project/ --current
+
+# Live dashboard (requires rich: pip install brooklet[rich])
+brooklet-scout ~/.claude/projects/-Users-you-your-project/ --current --follow --rich
+
+# Produce stats as JSONL for downstream consumers
+brooklet-scout ~/.claude/projects/-Users-you-your-project/ --output scout/session-stats
+```
+
+Reports token usage, tool call frequency, model breakdown, session duration, and event counts.
+
+## API
+
+| Method | Purpose |
+|--------|---------|
+| `brooklet.open(path)` | Open a stream directory |
+| `stream.register(name, path, mode)` | Map external JSONL to a topic name |
+| `stream.consume(topic, group, follow)` | Read events with offset tracking |
+| `stream.produce(topic, event, source)` | Write events to a local topic |
+| `stream.topics()` | List all registered topics |
 
 ## Development
 
 ```bash
-uv run pytest -v          # Run tests (43 tests)
+uv run pytest -v          # Run all tests (140 tests)
+uv run pytest tests/bdd/  # BDD acceptance tests (29 scenarios)
 uv run ruff check .       # Lint
 ```
 

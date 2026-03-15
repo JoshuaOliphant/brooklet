@@ -18,8 +18,17 @@ classifiers = [
 ]
 
 dependencies = [
+    "rich>=14.3.3",
     "watchdog>=4.0",
 ]
+
+[project.optional-dependencies]
+rich = [
+    "rich>=13.0",
+]
+
+[project.scripts]
+brooklet-scout = "brooklet.contrib.scout:main"
 
 [project.urls]
 Repository = "https://github.com/joshuaoliphant/brooklet"
@@ -58,6 +67,19 @@ markers = [
     "ac-14: AC-14 Glob follow detects new files matching the pattern",
     "ac-15: AC-15 Glob follow maintains offset across restarts",
     "ac-16: AC-16 Glob follow catches up before tailing",
+    "ac-17: AC-17 Scout scans sessions from a project path",
+    "ac-18: AC-18 Scout reports token usage",
+    "ac-19: AC-19 Scout reports tool call frequency",
+    "ac-20: AC-20 Scout reports session duration and event counts",
+    "ac-21: AC-21 Scout reports model usage breakdown",
+    "ac-22: AC-22 Scout uses brooklet offsets for incremental processing",
+    "ac-23: AC-23 Streaming log output",
+    "ac-24: AC-24 Rich live table output",
+    "ac-25: AC-25 Current session only mode",
+    "ac-26: AC-26 Current session with follow and rich",
+    "ac-27: AC-27 Follow mode for new sessions",
+    "ac-28: AC-28 JSONL output via produce",
+    "ac-29: AC-29 Configurable project path",
 ]
 
 [tool.pytest-bdd]
