@@ -5,6 +5,7 @@ from pathlib import Path
 
 from brooklet.consumer import Consumer
 from brooklet.registry import Registry
+from brooklet.types import Mode
 
 
 class Stream:
@@ -15,7 +16,7 @@ class Stream:
     brooklet through this class (via brooklet.open()).
     """
 
-    def __init__(self, path: str) -> None:
+    def __init__(self, path: str | Path) -> None:
         self._path = Path(path)
         self._brooklet_dir = self._path / ".brooklet"
         self._offsets_dir = self._brooklet_dir / "offsets"
@@ -26,7 +27,7 @@ class Stream:
 
         self._registry = Registry(self._brooklet_dir)
 
-    def register(self, name: str, path: str, mode: str) -> None:
+    def register(self, name: str, path: str, mode: Mode) -> None:
         """Register an external JSONL path as a named topic.
 
         Args:

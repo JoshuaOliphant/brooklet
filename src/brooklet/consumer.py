@@ -4,10 +4,12 @@
 import glob as glob_module
 import logging
 import warnings
+from collections.abc import Iterator
 from pathlib import Path
 
 from brooklet.envelope import wrap
 from brooklet.offsets import load, save
+from brooklet.types import Event, GlobOffset, Mode, SingleFileOffset
 
 logger = logging.getLogger("brooklet")
 
@@ -22,7 +24,7 @@ class Consumer:
     def __init__(
         self,
         path: str,
-        mode: str,
+        mode: Mode,
         group: str,
         topic: str,
         offsets_dir: str | Path,
@@ -30,7 +32,7 @@ class Consumer:
         follow: bool = False,
     ) -> None:
         self._path = path
-        self._mode = mode
+        self._mode: Mode = mode
         self._group = group
         self._topic = topic
         self._offsets_dir = Path(offsets_dir)
@@ -45,33 +47,20 @@ class Consumer:
             msg = "follow mode is not supported for glob sources"
             raise NotImplementedError(msg)
 
-        self._offset_data = self._load_offset()
+        self._offset: SingleFileOffset | GlobOffset = self._load_offset()
 
-    def _load_offset(self) -> dict:
-        """Load composite offset: {file_index, byte_offset} for glob, {byte_offset} for single."""
+    def _load_offset(self) -> SingleFileOffset | GlobOffset:
+        """Load offset from storage, returning the appropriate typed offset."""
         raw = load(self._offsets_dir, self._group, self._topic)
-        if raw == 0:
-            if self._mode == "glob":
-                return {"file_index": 0, "byte_offset": 0}
-            return {"byte_offset": 0}
-
-        # Composite offset encoding: file_index * 10**18 + byte_offset
-        # For single-file mode, raw is just the byte_offset directly
         if self._mode == "glob":
-            file_index = raw // (10**18)
-            byte_offset = raw % (10**18)
-            return {"file_index": file_index, "byte_offset": byte_offset}
-        return {"byte_offset": raw}
+            return GlobOffset.decode(raw)
+        return SingleFileOffset.decode(raw)
 
-    def _save_offset(self, offset_data: dict) -> None:
-        """Save the composite offset."""
-        if self._mode == "glob":
-            raw = offset_data["file_index"] * (10**18) + offset_data["byte_offset"]
-        else:
-            raw = offset_data["byte_offset"]
-        save(self._offsets_dir, self._group, self._topic, raw)
+    def _save_offset(self) -> None:
+        """Save the current offset to storage."""
+        save(self._offsets_dir, self._group, self._topic, self._offset.encode())
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[Event]:
         return self._iterate()
 
     def _iterate(self):
@@ -97,15 +86,16 @@ class Consumer:
         f = open(path)  # noqa: SIM115
         self._file_handle = f
         try:
-            f.seek(self._offset_data["byte_offset"])
+            assert isinstance(self._offset, SingleFileOffset)
+            f.seek(self._offset.byte_offset)
 
             if self._follow:
                 yield from self._iterate_follow(f, path)
             else:
                 yield from self._read_lines(f)
 
-            self._offset_data["byte_offset"] = f.tell()
-            self._save_offset(self._offset_data)
+            self._offset = SingleFileOffset(byte_offset=f.tell())
+            self._save_offset()
         finally:
             self._file_handle = None
             f.close()
@@ -134,8 +124,9 @@ class Consumer:
                 self._topic,
                 self._group,
             )
-        start_file_index = self._offset_data.get("file_index", 0)
-        start_byte_offset = self._offset_data.get("byte_offset", 0)
+        assert isinstance(self._offset, GlobOffset)
+        start_file_index = self._offset.file_index
+        start_byte_offset = self._offset.byte_offset
 
         for i, filepath in enumerate(files):
             if i < start_file_index:
@@ -150,12 +141,12 @@ class Consumer:
                 # After reading this file, update offset to next file
                 if i == len(files) - 1:
                     # Last file — save position within it
-                    self._offset_data = {"file_index": i, "byte_offset": f.tell()}
+                    self._offset = GlobOffset(file_index=i, byte_offset=f.tell())
                 else:
                     # Move to next file, start at byte 0
-                    self._offset_data = {"file_index": i + 1, "byte_offset": 0}
+                    self._offset = GlobOffset(file_index=i + 1, byte_offset=0)
 
-        self._save_offset(self._offset_data)
+        self._save_offset()
 
     def _iterate_follow(self, f, path):
         """Tail a file using watchdog for filesystem events."""
@@ -206,8 +197,8 @@ class Consumer:
         try:
             # Save offset from current file position if still open
             if self._file_handle is not None and not self._file_handle.closed:
-                self._offset_data["byte_offset"] = self._file_handle.tell()
-                self._save_offset(self._offset_data)
+                self._offset = SingleFileOffset(byte_offset=self._file_handle.tell())
+                self._save_offset()
         finally:
             if self._observer is not None:
                 self._observer.stop()

@@ -7,8 +7,11 @@ import os
 import re
 import tempfile
 from pathlib import Path
+from typing import get_args
 
-VALID_MODES = {"single-file", "glob"}
+from brooklet.types import Mode, SourceDef
+
+VALID_MODES: set[str] = set(get_args(Mode))
 
 _SAFE_NAME_RE = re.compile(r"^[a-zA-Z0-9_\-\.]+$")
 
@@ -67,7 +70,7 @@ class Registry:
                 os.unlink(tmp_path)
             raise
 
-    def register(self, name: str, path: str, mode: str) -> None:
+    def register(self, name: str, path: str, mode: Mode) -> None:
         """Register an external JSONL path as a named topic.
 
         Args:
@@ -84,10 +87,10 @@ class Registry:
             msg = f"mode must be one of {VALID_MODES}, got {mode!r}"
             raise ValueError(msg)
 
-        self._sources[name] = {"path": path, "mode": mode}
+        self._sources[name] = SourceDef(path=path, mode=mode)
         self._save()
 
-    def get(self, name: str) -> dict:
+    def get(self, name: str) -> SourceDef:
         """Get the source definition for a registered topic.
 
         Returns a copy to prevent mutation of internal state.
@@ -95,7 +98,7 @@ class Registry:
         Raises:
             KeyError: If the topic is not registered.
         """
-        return dict(self._sources[name])
+        return SourceDef(**self._sources[name])
 
     def list_topics(self) -> list[str]:
         """Return names of all registered topics."""

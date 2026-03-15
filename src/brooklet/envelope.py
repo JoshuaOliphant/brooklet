@@ -5,10 +5,12 @@ import json
 import logging
 from datetime import UTC, datetime
 
+from brooklet.types import Event
+
 logger = logging.getLogger("brooklet")
 
 
-def wrap(line: str, seq: int, source: str | None = None) -> dict | None:
+def wrap(line: str, seq: int, source: str | None = None) -> Event | None:
     """Wrap a raw JSONL line with envelope metadata.
 
     Auto-injects _ts (ISO 8601 timestamp) and _seq (sequence number).
