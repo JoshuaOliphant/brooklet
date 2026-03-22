@@ -1,11 +1,18 @@
 # ABOUTME: Unit tests for pytest analytics parsing and aggregation
 # ABOUTME: Tests Layer 1 (pure functions) and Layer 2 (consumer integration)
 
-from brooklet.contrib.pytest_analytics import aggregate_run, is_test_result, parse_test_event
+from brooklet.contrib.pytest_analytics import (
+    aggregate_run,
+    is_test_result,
+    parse_test_event,
+    scan_runs,
+)
 from tests.pytest_fixtures import (
     ALL_PASS_EVENTS,
     EMPTY_RUN_EVENTS,
+    MULTI_RUN_EVENTS,
     SINGLE_RUN_EVENTS,
+    write_run_file,
 )
 
 
@@ -150,3 +157,61 @@ class TestRunStatsToDict:
         assert d["skipped"] == 1
         assert isinstance(d["slowest"], list)
         assert isinstance(d["failures"], list)
+
+
+class TestScanRunsSingleFile:
+    def test_single_file_yields_one_run(self, tmp_path):
+        reports_dir = tmp_path / "reports"
+        reports_dir.mkdir()
+        write_run_file(reports_dir, "results", SINGLE_RUN_EVENTS)
+
+        runs = list(scan_runs(str(reports_dir / "results.jsonl"), mode="single-file"))
+        assert len(runs) == 1
+        assert runs[0].run_id == "results"
+        assert runs[0].total == 5
+        assert runs[0].passed == 3
+
+    def test_single_file_run_id_from_filename(self, tmp_path):
+        reports_dir = tmp_path / "reports"
+        reports_dir.mkdir()
+        write_run_file(reports_dir, "my-test-run", ALL_PASS_EVENTS)
+
+        runs = list(scan_runs(str(reports_dir / "my-test-run.jsonl"), mode="single-file"))
+        assert runs[0].run_id == "my-test-run"
+
+
+class TestScanRunsGlob:
+    def test_glob_yields_one_run_per_file(self, tmp_path):
+        reports_dir = tmp_path / "reports"
+        reports_dir.mkdir()
+        for name, events in MULTI_RUN_EVENTS.items():
+            write_run_file(reports_dir, name, events)
+
+        runs = list(scan_runs(str(reports_dir / "run-*.jsonl"), mode="glob"))
+        assert len(runs) == 3
+
+    def test_glob_runs_in_lexicographic_order(self, tmp_path):
+        reports_dir = tmp_path / "reports"
+        reports_dir.mkdir()
+        for name, events in MULTI_RUN_EVENTS.items():
+            write_run_file(reports_dir, name, events)
+
+        runs = list(scan_runs(str(reports_dir / "run-*.jsonl"), mode="glob"))
+        assert [r.run_id for r in runs] == ["run-001", "run-002", "run-003"]
+
+    def test_glob_run_stats_are_independent(self, tmp_path):
+        reports_dir = tmp_path / "reports"
+        reports_dir.mkdir()
+        for name, events in MULTI_RUN_EVENTS.items():
+            write_run_file(reports_dir, name, events)
+
+        runs = list(scan_runs(str(reports_dir / "run-*.jsonl"), mode="glob"))
+        # run-001: 1 pass, 1 fail
+        assert runs[0].passed == 1
+        assert runs[0].failed == 1
+        # run-002: 2 pass
+        assert runs[1].passed == 2
+        assert runs[1].failed == 0
+        # run-003: 2 pass, 1 skip
+        assert runs[2].passed == 2
+        assert runs[2].skipped == 1

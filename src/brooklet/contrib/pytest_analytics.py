@@ -3,7 +3,12 @@
 
 from __future__ import annotations
 
+import glob as glob_module
+from collections.abc import Iterator
 from dataclasses import dataclass, field
+from pathlib import Path
+
+import brooklet
 
 RECOGNIZED_REPORT_TYPES = {"SessionStart", "CollectReport", "TestReport", "SessionFinish"}
 
@@ -117,3 +122,54 @@ def aggregate_run(run_id: str, events: list[dict]) -> RunStats:
     ]
 
     return stats
+
+
+# ---------------------------------------------------------------------------
+# Layer 2: Consumer integration (uses brooklet API)
+# ---------------------------------------------------------------------------
+
+
+def _run_id_from_path(filepath: str) -> str:
+    """Extract run ID from a JSONL filename (stem)."""
+    return Path(filepath).stem
+
+
+def scan_runs(
+    path: str,
+    mode: str = "single-file",
+    follow: bool = False,
+) -> Iterator[RunStats]:
+    """Scan pytest report log(s) and yield per-run statistics.
+
+    Uses brooklet's consumer API for offset tracking and follow mode.
+
+    Args:
+        path: File path (single-file) or glob pattern (glob mode).
+        mode: Either "single-file" or "glob".
+        follow: If True, tail for new events.
+    """
+    parent_dir = str(Path(path).parent)
+    stream = brooklet.open(parent_dir)
+    topic = "pytest/results"
+
+    stream.register(topic, path, mode)
+
+    if mode == "single-file":
+        # One file = one run. Collect all events, aggregate.
+        events = list(stream.consume(topic, group="pytest-analytics", follow=follow))
+        if events:
+            run_id = _run_id_from_path(path)
+            yield aggregate_run(run_id, events)
+    elif mode == "glob":
+        # Each file is a separate run. Register and consume each file individually
+        # so per-run stats stay independent.
+        filepaths = sorted(glob_module.glob(path))
+        for filepath in filepaths:
+            run_id = _run_id_from_path(filepath)
+            per_file_topic = f"pytest/results/{run_id}"
+            stream.register(per_file_topic, filepath, "single-file")
+            events = list(
+                stream.consume(per_file_topic, group="pytest-analytics", follow=follow)
+            )
+            if events:
+                yield aggregate_run(run_id, events)
