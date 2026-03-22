@@ -61,6 +61,20 @@ class Consumer:
         """Save the current offset to storage."""
         save(self._offsets_dir, self._group, self._topic, self._offset.encode())
 
+    def _stop_observer(self, observer) -> None:
+        """Stop a watchdog observer with a bounded join timeout."""
+        observer.stop()
+        observer.join(timeout=_OBSERVER_JOIN_TIMEOUT)
+        if observer.is_alive():
+            observer.daemon = True  # Allow process exit despite hung thread
+            logger.error(
+                "Watchdog observer did not stop within %ss "
+                "(topic=%s, group=%s). Thread will be abandoned.",
+                _OBSERVER_JOIN_TIMEOUT,
+                self._topic,
+                self._group,
+            )
+
     def __iter__(self) -> Iterator[Event]:
         return self._iterate()
 
@@ -137,7 +151,10 @@ class Consumer:
                     except OSError as e:
                         logger.warning(
                             "Cannot stat skipped file %s (topic=%s, group=%s): %s",
-                            filepath, self._topic, self._group, e,
+                            filepath,
+                            self._topic,
+                            self._group,
+                            e,
                         )
                 continue
 
@@ -146,7 +163,10 @@ class Consumer:
             except OSError as e:
                 logger.warning(
                     "Cannot open file %s during catch-up (topic=%s, group=%s): %s",
-                    filepath, self._topic, self._group, e,
+                    filepath,
+                    self._topic,
+                    self._group,
+                    e,
                 )
                 # Advance offset past this file
                 if i == len(files) - 1:
@@ -244,9 +264,11 @@ class Consumer:
                             self._file_positions[filepath] = f.tell()
                     except OSError as e:
                         logger.warning(
-                            "Skipping file %s during glob+follow "
-                            "(topic=%s, group=%s): %s",
-                            filepath, self._topic, self._group, e,
+                            "Skipping file %s during glob+follow (topic=%s, group=%s): %s",
+                            filepath,
+                            self._topic,
+                            self._group,
+                            e,
                         )
                         continue
 
@@ -261,14 +283,7 @@ class Consumer:
                 self._save_offset()
         finally:
             self._save_offset()
-            observer.stop()
-            observer.join(timeout=_OBSERVER_JOIN_TIMEOUT)
-            if observer.is_alive():
-                logger.warning(
-                    "Watchdog observer did not stop within %ss "
-                    "(topic=%s, group=%s)",
-                    _OBSERVER_JOIN_TIMEOUT, self._topic, self._group,
-                )
+            self._stop_observer(observer)
 
     def _iterate_follow(self, f, path):
         """Tail a file using watchdog for filesystem events."""
@@ -309,14 +324,7 @@ class Consumer:
 
                 yield from self._read_lines(f)
         finally:
-            observer.stop()
-            observer.join(timeout=_OBSERVER_JOIN_TIMEOUT)
-            if observer.is_alive():
-                logger.warning(
-                    "Watchdog observer did not stop within %ss "
-                    "(topic=%s, group=%s)",
-                    _OBSERVER_JOIN_TIMEOUT, self._topic, self._group,
-                )
+            self._stop_observer(observer)
 
     def close(self) -> None:
         """Stop the consumer and save the current offset."""
@@ -335,14 +343,7 @@ class Consumer:
                 self._save_offset()
         finally:
             if self._observer is not None:
-                self._observer.stop()
-                self._observer.join(timeout=_OBSERVER_JOIN_TIMEOUT)
-                if self._observer.is_alive():
-                    logger.warning(
-                        "Watchdog observer did not stop within %ss "
-                        "(topic=%s, group=%s)",
-                        _OBSERVER_JOIN_TIMEOUT, self._topic, self._group,
-                    )
+                self._stop_observer(self._observer)
 
     def __enter__(self):
         return self

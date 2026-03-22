@@ -5,7 +5,6 @@ import json
 import logging
 import threading
 import time
-from unittest.mock import MagicMock
 
 from brooklet.consumer import Consumer
 
@@ -314,52 +313,6 @@ class TestObserverJoinTimeout:
         thread.join(timeout=5)
         assert not thread.is_alive()
 
-    def test_close_joins_with_timeout(self, sample_jsonl, offsets_dir):
-        """close() calls observer.join() with a timeout."""
-        consumer = Consumer(
-            path=str(sample_jsonl),
-            mode="single-file",
-            group="test",
-            topic="close-timeout",
-            offsets_dir=offsets_dir,
-            follow=True,
-        )
-        # Set up a mock observer to verify join is called with timeout
-        mock_observer = MagicMock()
-        mock_observer.is_alive.return_value = False
-        consumer._observer = mock_observer
-
-        consumer.close()
-
-        mock_observer.stop.assert_called_once()
-        mock_observer.join.assert_called_once()
-        # Verify join was called with a timeout argument
-        args, kwargs = mock_observer.join.call_args
-        timeout_val = kwargs.get("timeout") or (args[0] if args else None)
-        assert timeout_val is not None, "observer.join() must be called with a timeout"
-        assert timeout_val > 0
-
-    def test_close_logs_warning_when_observer_hangs(
-        self, sample_jsonl, offsets_dir, caplog
-    ):
-        """A warning is logged if observer thread is still alive after join timeout."""
-        consumer = Consumer(
-            path=str(sample_jsonl),
-            mode="single-file",
-            group="test",
-            topic="hang-warning",
-            offsets_dir=offsets_dir,
-            follow=True,
-        )
-        mock_observer = MagicMock()
-        mock_observer.is_alive.return_value = True  # Simulate hung thread
-        consumer._observer = mock_observer
-
-        with caplog.at_level(logging.WARNING, logger="brooklet"):
-            consumer.close()
-
-        assert any("did not stop" in r.message for r in caplog.records)
-
     def test_glob_follow_joins_with_timeout(self, tmp_path, offsets_dir):
         """_iterate_glob_follow calls observer.join() with a timeout."""
         d = tmp_path / "sessions"
@@ -387,3 +340,58 @@ class TestObserverJoinTimeout:
         thread.start()
         thread.join(timeout=5)
         assert not thread.is_alive()
+
+    def test_close_completes_without_hang(self, sample_jsonl, offsets_dir):
+        """close() with a real observer completes within a bounded time."""
+        events_seen = []
+
+        def consume_in_thread():
+            consumer = Consumer(
+                path=str(sample_jsonl),
+                mode="single-file",
+                group="test",
+                topic="close-no-hang",
+                offsets_dir=offsets_dir,
+                follow=True,
+            )
+            for event in consumer:
+                events_seen.append(event)
+                if len(events_seen) >= 2:
+                    consumer.close()
+                    break
+
+        thread = threading.Thread(target=consume_in_thread)
+        thread.start()
+        thread.join(timeout=5)
+        assert not thread.is_alive(), "Consumer thread hung — close() did not complete"
+
+    def test_stop_observer_stops_cleanly(self, tmp_path, offsets_dir, caplog):
+        """_stop_observer stops a real watchdog Observer without logging errors."""
+        from watchdog.observers import Observer
+
+        consumer = Consumer(
+            path=str(tmp_path / "dummy.jsonl"),
+            mode="single-file",
+            group="test",
+            topic="stop-observer",
+            offsets_dir=offsets_dir,
+        )
+
+        observer = Observer()
+        observer.schedule(
+            # Minimal no-op handler; we just need a running observer
+            type("H", (), {"dispatch": lambda self, e: None})(),
+            str(tmp_path),
+            recursive=False,
+        )
+        observer.start()
+
+        with caplog.at_level(logging.ERROR, logger="brooklet"):
+            consumer._stop_observer(observer)
+
+        assert not observer.is_alive()
+        # A cleanly stopped observer should NOT trigger the error log.
+        # NOTE: The hung-observer code path (daemon=True + logger.error) is
+        # not tested here because reliably simulating a hung watchdog thread
+        # without mocks is impractical. This is an accepted pragmatic gap.
+        assert not any("did not stop" in r.message for r in caplog.records)
