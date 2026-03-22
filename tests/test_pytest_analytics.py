@@ -1,6 +1,7 @@
 # ABOUTME: Unit tests for pytest analytics parsing and aggregation
 # ABOUTME: Tests Layer 1 (pure functions), Layer 2 (consumer integration), and Layer 3 (rendering)
 
+import brooklet as bl
 from brooklet.contrib.pytest_analytics import (
     aggregate_run,
     is_test_result,
@@ -242,3 +243,41 @@ class TestRenderRunBlock:
         output = render_run_block(stats)
         assert "3 passed" in output
         assert "FAIL" not in output
+
+
+class TestIntegration:
+    """Integration tests — full register → consume → produce roundtrip."""
+
+    def test_register_consume_has_envelope_fields(self, tmp_path):
+        """AC-1 integration: registered file yields events with _ts, _seq."""
+        reports_dir = tmp_path / "reports"
+        reports_dir.mkdir()
+        write_run_file(reports_dir, "integration", SINGLE_RUN_EVENTS)
+
+        stream = bl.open(str(reports_dir))
+        stream.register("pytest/int", str(reports_dir / "integration.jsonl"), "single-file")
+        events = list(stream.consume("pytest/int", group="int-test"))
+
+        assert len(events) > 0
+        for event in events:
+            assert "_ts" in event
+            assert "_seq" in event
+
+    def test_produce_summary_to_derived_topic(self, tmp_path):
+        """AC-6 integration: produce stats to a derived topic, then consume them."""
+        reports_dir = tmp_path / "reports"
+        reports_dir.mkdir()
+        write_run_file(reports_dir, "prod-test", SINGLE_RUN_EVENTS)
+
+        stream = bl.open(str(reports_dir))
+        runs = list(scan_runs(str(reports_dir / "prod-test.jsonl"), mode="single-file"))
+        assert len(runs) == 1
+
+        # Produce summary to derived topic
+        stream.produce("pytest/summaries", runs[0].to_dict(), source="pytest-analytics")
+
+        # Consume the derived topic
+        summaries = list(stream.consume("pytest/summaries", group="verify"))
+        assert len(summaries) == 1
+        assert summaries[0]["total"] == 5
+        assert summaries[0]["passed"] == 3
