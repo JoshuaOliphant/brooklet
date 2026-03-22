@@ -10,7 +10,9 @@ import brooklet
 @pytest.fixture
 def stream_dir(tmp_path):
     """Provide a temporary directory for stream data."""
-    return tmp_path / "streams"
+    d = tmp_path / "streams"
+    d.mkdir()
+    return d
 
 
 @pytest.fixture
