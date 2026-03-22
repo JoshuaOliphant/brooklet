@@ -306,8 +306,8 @@ class TestConsumerBatch:
         consumer.close()
 
     def test_glob_file_index_out_of_bounds_resets(self, tmp_path, offsets_dir, caplog):
-        """Stale file_index beyond file count resets to 0 with warning."""
-        from brooklet.offsets import save
+        """Stale file_index beyond file count resets to 0 with error."""
+        from brooklet.offsets import load, save
         from brooklet.types import GlobOffset
 
         dir_ = tmp_path / "sessions"
@@ -328,16 +328,30 @@ class TestConsumerBatch:
             topic="stale-idx",
             offsets_dir=offsets_dir,
         )
-        with caplog.at_level(logging.WARNING, logger="brooklet"):
+        with caplog.at_level(logging.ERROR, logger="brooklet"):
             events = list(consumer)
 
         # Should re-read all files after reset
         assert len(events) == 2
-        assert "file_index" in caplog.text.lower() or "out of bounds" in caplog.text.lower()
+        assert events[0]["type"] == "a"
+        assert events[1]["type"] == "b"
+
+        # Verify error-level log fired
+        error_records = [r for r in caplog.records if r.levelno >= logging.ERROR]
+        assert any(
+            "file_index" in r.message.lower() or "out of bounds" in r.message.lower()
+            for r in error_records
+        )
+
+        # Verify persisted offset reflects consumption of both files
+        raw = load(offsets_dir, "test", "stale-idx")
+        persisted = GlobOffset.decode(raw)
+        assert persisted.file_index == 1
+        assert persisted.byte_offset > 0
 
     def test_glob_file_removed_between_sessions(self, tmp_path, offsets_dir, caplog):
         """When files are removed between sessions, stale index is detected."""
-        from brooklet.offsets import save
+        from brooklet.offsets import load, save
         from brooklet.types import GlobOffset
 
         dir_ = tmp_path / "sessions"
@@ -365,9 +379,126 @@ class TestConsumerBatch:
             topic="removed",
             offsets_dir=offsets_dir,
         )
-        with caplog.at_level(logging.WARNING, logger="brooklet"):
+        with caplog.at_level(logging.ERROR, logger="brooklet"):
             events = list(consumer)
 
         # file_index=2 is out of bounds for 2 files, should reset and re-read
         assert len(events) == 2
-        assert "out of bounds" in caplog.text.lower() or "file_index" in caplog.text.lower()
+        assert events[0]["type"] == "b"
+        assert events[1]["type"] == "c"
+
+        # Verify error-level log fired
+        error_records = [r for r in caplog.records if r.levelno >= logging.ERROR]
+        assert any(
+            "file_index" in r.message.lower() or "out of bounds" in r.message.lower()
+            for r in error_records
+        )
+
+        # Verify persisted offset reflects consumption of remaining files
+        raw = load(offsets_dir, "test", "removed")
+        persisted = GlobOffset.decode(raw)
+        assert persisted.file_index == 1
+        assert persisted.byte_offset > 0
+
+    def test_glob_empty_files_with_stale_offset_resets(self, tmp_path, offsets_dir, caplog):
+        """Stale offset with no matching files resets to 0 and logs error."""
+        from brooklet.offsets import load, save
+        from brooklet.types import GlobOffset
+
+        dir_ = tmp_path / "empty_glob"
+        dir_.mkdir()
+
+        # Save a stale offset pointing to file_index=3
+        stale = GlobOffset(file_index=3, byte_offset=42)
+        save(offsets_dir, "test", "empty-stale", stale.encode())
+
+        consumer = Consumer(
+            path=str(dir_ / "*.jsonl"),
+            mode="glob",
+            group="test",
+            topic="empty-stale",
+            offsets_dir=offsets_dir,
+        )
+        with caplog.at_level(logging.ERROR, logger="brooklet"):
+            events = list(consumer)
+
+        # No events returned, no crash
+        assert events == []
+
+        # Verify error about non-zero offset
+        error_records = [r for r in caplog.records if r.levelno >= logging.ERROR]
+        assert any(
+            "non-zero" in r.message.lower() or "no files" in r.message.lower()
+            for r in error_records
+        )
+
+        # Verify persisted offset is reset to 0
+        raw = load(offsets_dir, "test", "empty-stale")
+        persisted = GlobOffset.decode(raw)
+        assert persisted.file_index == 0
+        assert persisted.byte_offset == 0
+
+    def test_glob_follow_with_stale_index_resets(self, tmp_path, offsets_dir, caplog):
+        """Stale file_index in follow mode resets and reads all files."""
+        import threading
+        import time
+
+        from brooklet.offsets import save
+        from brooklet.types import GlobOffset
+
+        dir_ = tmp_path / "follow_stale"
+        dir_.mkdir()
+
+        # Create 2 files
+        for name, event in [("a.jsonl", {"type": "a"}), ("b.jsonl", {"type": "b"})]:
+            with open(dir_ / name, "w") as f:
+                f.write(json.dumps(event) + "\n")
+
+        # Save stale offset beyond file count
+        stale = GlobOffset(file_index=5, byte_offset=0)
+        save(offsets_dir, "test", "follow-stale", stale.encode())
+
+        consumer = Consumer(
+            path=str(dir_ / "*.jsonl"),
+            mode="glob",
+            group="test",
+            topic="follow-stale",
+            offsets_dir=offsets_dir,
+            follow=True,
+        )
+
+        collected = []
+
+        def consume():
+            for event in consumer:
+                collected.append(event)
+
+        t = threading.Thread(target=consume, daemon=True)
+        with caplog.at_level(logging.ERROR, logger="brooklet"):
+            t.start()
+
+            # Wait briefly for catch-up to process existing files
+            time.sleep(1.0)
+
+            # Append a new event to trigger follow-mode pickup
+            with open(dir_ / "b.jsonl", "a") as f:
+                f.write(json.dumps({"type": "b2"}) + "\n")
+
+            # Wait for follow mode to pick up the new event
+            time.sleep(1.5)
+
+            consumer.close()
+            t.join(timeout=5.0)
+
+        # Should have caught up on a + b, plus the appended b2
+        types = [e["type"] for e in collected]
+        assert "a" in types
+        assert "b" in types
+        assert "b2" in types
+
+        # Verify error-level reset log fired
+        error_records = [r for r in caplog.records if r.levelno >= logging.ERROR]
+        assert any(
+            "file_index" in r.message.lower() or "out of bounds" in r.message.lower()
+            for r in error_records
+        )

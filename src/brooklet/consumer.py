@@ -123,15 +123,33 @@ class Consumer:
         also populates _file_positions for subsequent tailing.
         """
         assert isinstance(self._offset, GlobOffset)
+
+        if not files:
+            if self._offset.file_index != 0 or self._offset.byte_offset != 0:
+                logger.error(
+                    "Glob matched no files but offset is non-zero "
+                    "(file_index=%d, byte_offset=%d). "
+                    "Resetting offset (topic=%s, group=%s).",
+                    self._offset.file_index,
+                    self._offset.byte_offset,
+                    self._topic,
+                    self._group,
+                )
+                self._offset = GlobOffset(file_index=0, byte_offset=0)
+            return
+
         start_file_index = self._offset.file_index
         start_byte_offset = self._offset.byte_offset
 
-        if files and start_file_index >= len(files):
-            logger.warning(
+        if start_file_index >= len(files):
+            logger.error(
                 "Saved file_index %d is out of bounds (only %d files matched). "
                 "Files may have been added or removed between sessions. "
                 "Resetting to start of all files (topic=%s, group=%s).",
-                start_file_index, len(files), self._topic, self._group,
+                start_file_index,
+                len(files),
+                self._topic,
+                self._group,
             )
             start_file_index = 0
             start_byte_offset = 0
@@ -146,7 +164,10 @@ class Consumer:
                     except OSError as e:
                         logger.warning(
                             "Cannot stat skipped file %s (topic=%s, group=%s): %s",
-                            filepath, self._topic, self._group, e,
+                            filepath,
+                            self._topic,
+                            self._group,
+                            e,
                         )
                 continue
 
@@ -155,7 +176,10 @@ class Consumer:
             except OSError as e:
                 logger.warning(
                     "Cannot open file %s during catch-up (topic=%s, group=%s): %s",
-                    filepath, self._topic, self._group, e,
+                    filepath,
+                    self._topic,
+                    self._group,
+                    e,
                 )
                 # Advance offset past this file
                 if i == len(files) - 1:
@@ -253,9 +277,11 @@ class Consumer:
                             self._file_positions[filepath] = f.tell()
                     except OSError as e:
                         logger.warning(
-                            "Skipping file %s during glob+follow "
-                            "(topic=%s, group=%s): %s",
-                            filepath, self._topic, self._group, e,
+                            "Skipping file %s during glob+follow (topic=%s, group=%s): %s",
+                            filepath,
+                            self._topic,
+                            self._group,
+                            e,
                         )
                         continue
 
