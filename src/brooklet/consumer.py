@@ -14,6 +14,8 @@ from brooklet.types import Event, GlobOffset, Mode, SingleFileOffset
 
 logger = logging.getLogger("brooklet")
 
+_OBSERVER_JOIN_TIMEOUT = 5
+
 
 class Consumer:
     """Iterator over JSONL events with offset tracking.
@@ -260,7 +262,13 @@ class Consumer:
         finally:
             self._save_offset()
             observer.stop()
-            observer.join()
+            observer.join(timeout=_OBSERVER_JOIN_TIMEOUT)
+            if observer.is_alive():
+                logger.warning(
+                    "Watchdog observer did not stop within %ss "
+                    "(topic=%s, group=%s)",
+                    _OBSERVER_JOIN_TIMEOUT, self._topic, self._group,
+                )
 
     def _iterate_follow(self, f, path):
         """Tail a file using watchdog for filesystem events."""
@@ -302,7 +310,13 @@ class Consumer:
                 yield from self._read_lines(f)
         finally:
             observer.stop()
-            observer.join()
+            observer.join(timeout=_OBSERVER_JOIN_TIMEOUT)
+            if observer.is_alive():
+                logger.warning(
+                    "Watchdog observer did not stop within %ss "
+                    "(topic=%s, group=%s)",
+                    _OBSERVER_JOIN_TIMEOUT, self._topic, self._group,
+                )
 
     def close(self) -> None:
         """Stop the consumer and save the current offset."""
@@ -322,7 +336,13 @@ class Consumer:
         finally:
             if self._observer is not None:
                 self._observer.stop()
-                self._observer.join()
+                self._observer.join(timeout=_OBSERVER_JOIN_TIMEOUT)
+                if self._observer.is_alive():
+                    logger.warning(
+                        "Watchdog observer did not stop within %ss "
+                        "(topic=%s, group=%s)",
+                        _OBSERVER_JOIN_TIMEOUT, self._topic, self._group,
+                    )
 
     def __enter__(self):
         return self

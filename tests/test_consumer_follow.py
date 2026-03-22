@@ -2,8 +2,10 @@
 # ABOUTME: Covers catch-up, append detection, offset persistence, and glob+follow
 
 import json
+import logging
 import threading
 import time
+from unittest.mock import MagicMock
 
 from brooklet.consumer import Consumer
 
@@ -283,3 +285,105 @@ class TestConsumerFollow:
         assert "a1" in types
         assert "c1" in types
         assert "b1" not in types
+
+
+class TestObserverJoinTimeout:
+    """Tests for observer.join() timeout to prevent hang on shutdown."""
+
+    def test_iterate_follow_joins_with_timeout(self, sample_jsonl, offsets_dir):
+        """_iterate_follow calls observer.join() with a timeout."""
+        events_seen = []
+
+        def consume_in_thread():
+            consumer = Consumer(
+                path=str(sample_jsonl),
+                mode="single-file",
+                group="test",
+                topic="join-timeout",
+                offsets_dir=offsets_dir,
+                follow=True,
+            )
+            for event in consumer:
+                events_seen.append(event)
+                if len(events_seen) >= 3:
+                    consumer.close()
+                    break
+
+        thread = threading.Thread(target=consume_in_thread)
+        thread.start()
+        thread.join(timeout=5)
+        assert not thread.is_alive()
+
+    def test_close_joins_with_timeout(self, sample_jsonl, offsets_dir):
+        """close() calls observer.join() with a timeout."""
+        consumer = Consumer(
+            path=str(sample_jsonl),
+            mode="single-file",
+            group="test",
+            topic="close-timeout",
+            offsets_dir=offsets_dir,
+            follow=True,
+        )
+        # Set up a mock observer to verify join is called with timeout
+        mock_observer = MagicMock()
+        mock_observer.is_alive.return_value = False
+        consumer._observer = mock_observer
+
+        consumer.close()
+
+        mock_observer.stop.assert_called_once()
+        mock_observer.join.assert_called_once()
+        # Verify join was called with a timeout argument
+        args, kwargs = mock_observer.join.call_args
+        timeout_val = kwargs.get("timeout") or (args[0] if args else None)
+        assert timeout_val is not None, "observer.join() must be called with a timeout"
+        assert timeout_val > 0
+
+    def test_close_logs_warning_when_observer_hangs(
+        self, sample_jsonl, offsets_dir, caplog
+    ):
+        """A warning is logged if observer thread is still alive after join timeout."""
+        consumer = Consumer(
+            path=str(sample_jsonl),
+            mode="single-file",
+            group="test",
+            topic="hang-warning",
+            offsets_dir=offsets_dir,
+            follow=True,
+        )
+        mock_observer = MagicMock()
+        mock_observer.is_alive.return_value = True  # Simulate hung thread
+        consumer._observer = mock_observer
+
+        with caplog.at_level(logging.WARNING, logger="brooklet"):
+            consumer.close()
+
+        assert any("did not stop" in r.message for r in caplog.records)
+
+    def test_glob_follow_joins_with_timeout(self, tmp_path, offsets_dir):
+        """_iterate_glob_follow calls observer.join() with a timeout."""
+        d = tmp_path / "sessions"
+        d.mkdir()
+        (d / "a.jsonl").write_text(json.dumps({"type": "a1"}) + "\n")
+
+        events_seen = []
+
+        def consume_in_thread():
+            consumer = Consumer(
+                path=str(d / "*.jsonl"),
+                mode="glob",
+                group="test",
+                topic="glob-join-timeout",
+                offsets_dir=offsets_dir,
+                follow=True,
+            )
+            for event in consumer:
+                events_seen.append(event)
+                if len(events_seen) >= 1:
+                    consumer.close()
+                    break
+
+        thread = threading.Thread(target=consume_in_thread)
+        thread.start()
+        thread.join(timeout=5)
+        assert not thread.is_alive()
