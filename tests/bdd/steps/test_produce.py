@@ -28,17 +28,6 @@ def ctx():
 
 
 # ---------------------------------------------------------------------------
-# Background
-# ---------------------------------------------------------------------------
-
-
-@given("a stream opened at an empty directory", target_fixture="stream")
-def given_stream_at_empty_dir(stream):
-    """Use the stream fixture from conftest."""
-    return stream
-
-
-# ---------------------------------------------------------------------------
 # Given steps
 # ---------------------------------------------------------------------------
 
@@ -223,12 +212,6 @@ def then_first_lines_unchanged(stream, ctx):
     current_lines = data_files[-1].read_text().splitlines()
     for i, original in enumerate(ctx["original_lines"]):
         assert current_lines[i] == original, f"Line {i} was modified"
-
-
-@then(parsers.parse('"{topic}" appears in the stream topics list'))
-def then_topic_in_topics(stream, topic):
-    """Verify topic appears in stream.topics()."""
-    assert topic in stream.topics()
 
 
 @then(parsers.parse('consuming "{topic}" with group "{group}" yields the produced event'))
