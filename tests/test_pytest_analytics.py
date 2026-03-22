@@ -1,11 +1,15 @@
 # ABOUTME: Unit tests for pytest analytics parsing and aggregation
 # ABOUTME: Tests Layer 1 (pure functions), Layer 2 (consumer integration), and Layer 3 (rendering)
 
+import pytest
+
 import brooklet as bl
 from brooklet.contrib.pytest_analytics import (
     aggregate_run,
     is_test_result,
+    main,
     parse_test_event,
+    render_cumulative,
     render_run_block,
     scan_runs,
 )
@@ -281,3 +285,102 @@ class TestIntegration:
         assert len(summaries) == 1
         assert summaries[0]["total"] == 5
         assert summaries[0]["passed"] == 3
+
+
+class TestAggregateRunErrorOutcome:
+    """Test that the "error" outcome is counted correctly."""
+
+    def test_error_outcome_counted(self):
+        events = [
+            {
+                "$report_type": "TestReport",
+                "nodeid": "tests/test_setup.py::test_broken_fixture",
+                "outcome": "error",
+                "when": "call",
+                "duration": 0.001,
+            },
+        ]
+        stats = aggregate_run("error-run", events)
+        assert stats.errored == 1
+        assert stats.total == 1
+        assert stats.passed == 0
+
+
+class TestRenderCumulative:
+    """Test render_cumulative — aggregate totals across runs."""
+
+    def test_empty_runs(self):
+        output = render_cumulative([])
+        assert output == "No runs processed."
+
+    def test_multi_run_totals(self):
+        stats1 = aggregate_run("run-1", SINGLE_RUN_EVENTS)
+        stats2 = aggregate_run("run-2", ALL_PASS_EVENTS)
+        output = render_cumulative([stats1, stats2])
+        assert "2 runs totals" in output
+        assert "8 tests" in output
+        assert "6 passed" in output
+
+
+class TestScanRunsValidation:
+    """Test scan_runs input validation."""
+
+    def test_invalid_mode_raises_value_error(self, tmp_path):
+        reports_dir = tmp_path / "reports"
+        reports_dir.mkdir()
+        write_run_file(reports_dir, "test", SINGLE_RUN_EVENTS)
+
+        with pytest.raises(ValueError, match="mode must be one of"):
+            list(scan_runs(str(reports_dir / "test.jsonl"), mode="multi-file"))
+
+    def test_missing_file_raises_file_not_found(self, tmp_path):
+        with pytest.raises(FileNotFoundError, match="Report log not found"):
+            list(scan_runs(str(tmp_path / "nonexistent.jsonl"), mode="single-file"))
+
+
+class TestMainCLI:
+    """Test main() CLI entry point."""
+
+    def test_single_file_prints_output(self, tmp_path, capsys):
+        reports_dir = tmp_path / "reports"
+        reports_dir.mkdir()
+        write_run_file(reports_dir, "cli-test", SINGLE_RUN_EVENTS)
+
+        main([str(reports_dir / "cli-test.jsonl")])
+        captured = capsys.readouterr()
+        assert "cli-test" in captured.out
+        assert "5 tests" in captured.out
+        assert "1 runs totals" in captured.out
+
+    def test_glob_mode_prints_multiple_runs(self, tmp_path, capsys):
+        reports_dir = tmp_path / "reports"
+        reports_dir.mkdir()
+        for name, events in MULTI_RUN_EVENTS.items():
+            write_run_file(reports_dir, name, events)
+
+        main([str(reports_dir / "run-*.jsonl"), "--glob"])
+        captured = capsys.readouterr()
+        assert "run-001" in captured.out
+        assert "run-002" in captured.out
+        assert "run-003" in captured.out
+        assert "3 runs totals" in captured.out
+
+    def test_output_flag_produces_to_topic(self, tmp_path, capsys):
+        reports_dir = tmp_path / "reports"
+        reports_dir.mkdir()
+        write_run_file(reports_dir, "output-test", SINGLE_RUN_EVENTS)
+
+        main([
+            str(reports_dir / "output-test.jsonl"),
+            "--output", "pytest/summaries",
+        ])
+
+        # Verify events were produced
+        stream = bl.open(str(reports_dir))
+        summaries = list(stream.consume("pytest/summaries", group="verify"))
+        assert len(summaries) == 1
+        assert summaries[0]["total"] == 5
+
+    def test_missing_file_exits_with_error(self, tmp_path):
+        with pytest.raises(SystemExit):
+            main([str(tmp_path / "nope.jsonl")])

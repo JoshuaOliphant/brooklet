@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import glob as glob_module
+import sys
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -139,6 +140,7 @@ def scan_runs(
     path: str,
     mode: str = "single-file",
     follow: bool = False,
+    stream: brooklet.Stream | None = None,
 ) -> Iterator[RunStats]:
     """Scan pytest report log(s) and yield per-run statistics.
 
@@ -148,15 +150,28 @@ def scan_runs(
         path: File path (single-file) or glob pattern (glob mode).
         mode: Either "single-file" or "glob".
         follow: If True, tail for new events.
-    """
-    parent_dir = str(Path(path).parent)
-    stream = brooklet.open(parent_dir)
-    topic = "pytest/results"
+        stream: Optional brooklet Stream to use. Created automatically if not provided.
 
-    stream.register(topic, path, mode)
+    Raises:
+        ValueError: If mode is not "single-file" or "glob".
+        FileNotFoundError: If path does not exist in single-file mode.
+    """
+    valid_modes = {"single-file", "glob"}
+    if mode not in valid_modes:
+        msg = f"mode must be one of {valid_modes}, got {mode!r}"
+        raise ValueError(msg)
+
+    if mode == "single-file" and not Path(path).exists():
+        msg = f"Report log not found: {path}"
+        raise FileNotFoundError(msg)
+
+    if stream is None:
+        parent_dir = str(Path(path).parent)
+        stream = brooklet.open(parent_dir)
 
     if mode == "single-file":
-        # One file = one run. Collect all events, aggregate.
+        topic = "pytest/results"
+        stream.register(topic, path, mode)
         events = list(stream.consume(topic, group="pytest-analytics", follow=follow))
         if events:
             run_id = _run_id_from_path(path)
@@ -269,25 +284,43 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
     mode = "glob" if args.glob else "single-file"
 
-    stats_iter = scan_runs(path=args.path, mode=mode, follow=args.follow)
+    if not args.glob and not Path(args.path).exists():
+        parser.error(f"File not found: {args.path}")
 
-    if args.output:
+    try:
         parent_dir = str(Path(args.path).resolve().parent)
         stream = brooklet.open(parent_dir)
-        original_iter = stats_iter
 
-        def producing_iter():
-            for stats in original_iter:
-                stream.produce(args.output, stats.to_dict(), source="pytest-analytics")
-                yield stats
+        stats_iter = scan_runs(path=args.path, mode=mode, follow=args.follow, stream=stream)
 
-        stats_iter = producing_iter()
+        if args.output:
+            original_iter = stats_iter
 
-    runs = []
-    try:
+            def producing_iter():
+                for stats in original_iter:
+                    try:
+                        stream.produce(args.output, stats.to_dict(), source="pytest-analytics")
+                    except (OSError, ValueError, TypeError) as e:
+                        print(
+                            f"Warning: failed to produce run {stats.run_id} "
+                            f"to topic {args.output!r}: {e}",
+                            file=sys.stderr,
+                        )
+                    yield stats
+
+            stats_iter = producing_iter()
+
+        runs: list[RunStats] = []
         for stats in stats_iter:
             runs.append(stats)
             print(render_run_block(stats))
         print(render_cumulative(runs))
     except KeyboardInterrupt:
+        print(file=sys.stderr)
+        if runs:
+            print(render_cumulative(runs))
+    except BrokenPipeError:
         pass
+    except (FileNotFoundError, ValueError) as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
