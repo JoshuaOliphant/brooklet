@@ -29,6 +29,7 @@ rich = [
 
 [project.scripts]
 brooklet-scout = "brooklet.contrib.claude_analytics:main"
+brooklet-pytest = "brooklet.contrib.pytest_analytics:main"
 
 [project.urls]
 Repository = "https://github.com/joshuaoliphant/brooklet"
@@ -80,6 +81,12 @@ markers = [
     "ac-27: AC-27 Follow mode for new sessions",
     "ac-28: AC-28 JSONL output via produce",
     "ac-29: AC-29 Configurable project path",
+    "ac-pt-1: AC-PT-1 Register a single pytest report log",
+    "ac-pt-2: AC-PT-2 Register a directory of report logs",
+    "ac-pt-3: AC-PT-3 Filter to test outcomes only",
+    "ac-pt-4: AC-PT-4 Incremental consumption across runs",
+    "ac-pt-5: AC-PT-5 Follow mode tails active test run",
+    "ac-pt-6: AC-PT-6 Summary stats per run",
 ]
 
 [tool.pytest-bdd]

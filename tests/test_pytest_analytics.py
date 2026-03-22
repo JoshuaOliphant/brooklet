@@ -1,10 +1,11 @@
 # ABOUTME: Unit tests for pytest analytics parsing and aggregation
-# ABOUTME: Tests Layer 1 (pure functions) and Layer 2 (consumer integration)
+# ABOUTME: Tests Layer 1 (pure functions), Layer 2 (consumer integration), and Layer 3 (rendering)
 
 from brooklet.contrib.pytest_analytics import (
     aggregate_run,
     is_test_result,
     parse_test_event,
+    render_run_block,
     scan_runs,
 )
 from tests.pytest_fixtures import (
@@ -215,3 +216,29 @@ class TestScanRunsGlob:
         # run-003: 2 pass, 1 skip
         assert runs[2].passed == 2
         assert runs[2].skipped == 1
+
+
+class TestRenderRunBlock:
+    def test_render_includes_run_id(self):
+        stats = aggregate_run("test-run", SINGLE_RUN_EVENTS)
+        output = render_run_block(stats)
+        assert "test-run" in output
+
+    def test_render_includes_counts(self):
+        stats = aggregate_run("test-run", SINGLE_RUN_EVENTS)
+        output = render_run_block(stats)
+        assert "5 tests" in output
+        assert "3 passed" in output
+        assert "1 failed" in output
+        assert "1 skipped" in output
+
+    def test_render_includes_failures(self):
+        stats = aggregate_run("test-run", SINGLE_RUN_EVENTS)
+        output = render_run_block(stats)
+        assert "test_divide" in output
+
+    def test_render_all_pass_no_failures_section(self):
+        stats = aggregate_run("clean", ALL_PASS_EVENTS)
+        output = render_run_block(stats)
+        assert "3 passed" in output
+        assert "FAIL" not in output

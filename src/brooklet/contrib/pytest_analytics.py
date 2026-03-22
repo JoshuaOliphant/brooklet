@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import argparse
 import glob as glob_module
 from collections.abc import Iterator
 from dataclasses import dataclass, field
@@ -173,3 +174,120 @@ def scan_runs(
             )
             if events:
                 yield aggregate_run(run_id, events)
+
+
+# ---------------------------------------------------------------------------
+# Layer 3: Output renderers and CLI
+# ---------------------------------------------------------------------------
+
+
+def _format_duration(seconds: float) -> str:
+    """Format seconds into human-readable duration."""
+    if seconds < 1:
+        return f"{seconds * 1000:.0f}ms"
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    return f"{seconds / 60:.1f}m"
+
+
+def render_run_block(stats: RunStats) -> str:
+    """Render a single run's stats as plain text."""
+    lines = []
+    lines.append(f"--- run {stats.run_id} ---")
+    lines.append(
+        f"  {stats.total} tests: "
+        f"{stats.passed} passed, {stats.failed} failed, "
+        f"{stats.skipped} skipped, {stats.errored} errored"
+    )
+    lines.append(f"  duration: {_format_duration(stats.duration_s)}")
+
+    if stats.slowest:
+        lines.append("  slowest:")
+        for entry in stats.slowest[:5]:
+            lines.append(f"    {_format_duration(entry['duration'])}  {entry['nodeid']}")
+
+    if stats.failures:
+        lines.append("  failures:")
+        for entry in stats.failures:
+            short = (entry["longrepr"] or "").split("\n")[0][:120]
+            lines.append(f"    FAIL {entry['nodeid']}")
+            if short:
+                lines.append(f"         {short}")
+
+    return "\n".join(lines)
+
+
+def render_cumulative(runs: list[RunStats]) -> str:
+    """Render aggregate totals across all runs."""
+    if not runs:
+        return "No runs processed."
+
+    total = sum(r.total for r in runs)
+    passed = sum(r.passed for r in runs)
+    failed = sum(r.failed for r in runs)
+    skipped = sum(r.skipped for r in runs)
+    errored = sum(r.errored for r in runs)
+    duration = sum(r.duration_s for r in runs)
+
+    lines = []
+    lines.append(f"\n=== {len(runs)} runs totals ===")
+    lines.append(
+        f"  {total} tests: "
+        f"{passed} passed, {failed} failed, "
+        f"{skipped} skipped, {errored} errored"
+    )
+    lines.append(f"  duration: {_format_duration(duration)}")
+    return "\n".join(lines)
+
+
+def main(argv: list[str] | None = None) -> None:
+    """CLI entry point for brooklet-pytest."""
+    parser = argparse.ArgumentParser(
+        prog="brooklet-pytest",
+        description="Consume pytest-reportlog JSONL and report test analytics.",
+    )
+    parser.add_argument(
+        "path",
+        help="Path to report log file or glob pattern",
+    )
+    parser.add_argument(
+        "--glob",
+        action="store_true",
+        help="Treat path as a glob pattern (each file is a separate run)",
+    )
+    parser.add_argument(
+        "--follow",
+        action="store_true",
+        help="Tail for new test events",
+    )
+    parser.add_argument(
+        "--output",
+        metavar="TOPIC",
+        help="Produce run stats as JSONL events to a brooklet topic",
+    )
+
+    args = parser.parse_args(argv)
+    mode = "glob" if args.glob else "single-file"
+
+    stats_iter = scan_runs(path=args.path, mode=mode, follow=args.follow)
+
+    if args.output:
+        parent_dir = str(Path(args.path).resolve().parent)
+        stream = brooklet.open(parent_dir)
+        original_iter = stats_iter
+
+        def producing_iter():
+            for stats in original_iter:
+                stream.produce(args.output, stats.to_dict(), source="pytest-analytics")
+                yield stats
+
+        stats_iter = producing_iter()
+
+    runs = []
+    try:
+        for stats in stats_iter:
+            runs.append(stats)
+            print(render_run_block(stats))
+        print(render_cumulative(runs))
+    except KeyboardInterrupt:
+        pass
