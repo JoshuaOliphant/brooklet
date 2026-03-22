@@ -126,6 +126,17 @@ class Consumer:
         start_file_index = self._offset.file_index
         start_byte_offset = self._offset.byte_offset
 
+        if files and start_file_index >= len(files):
+            logger.warning(
+                "Saved file_index %d is out of bounds (only %d files matched). "
+                "Files may have been added or removed between sessions. "
+                "Resetting to start of all files (topic=%s, group=%s).",
+                start_file_index, len(files), self._topic, self._group,
+            )
+            start_file_index = 0
+            start_byte_offset = 0
+            self._offset = GlobOffset(file_index=0, byte_offset=0)
+
         for i, filepath in enumerate(files):
             if i < start_file_index:
                 # Still record position for follow mode

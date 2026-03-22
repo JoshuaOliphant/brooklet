@@ -304,3 +304,70 @@ class TestConsumerBatch:
         list(consumer)
         # Observer is None for batch mode, so close should just work
         consumer.close()
+
+    def test_glob_file_index_out_of_bounds_resets(self, tmp_path, offsets_dir, caplog):
+        """Stale file_index beyond file count resets to 0 with warning."""
+        from brooklet.offsets import save
+        from brooklet.types import GlobOffset
+
+        dir_ = tmp_path / "sessions"
+        dir_.mkdir()
+        # Create 2 files
+        for name, event in [("a.jsonl", {"type": "a"}), ("b.jsonl", {"type": "b"})]:
+            with open(dir_ / name, "w") as f:
+                f.write(json.dumps(event) + "\n")
+
+        # Save offset pointing to file_index=5 (way beyond 2 files)
+        stale = GlobOffset(file_index=5, byte_offset=0)
+        save(offsets_dir, "test", "stale-idx", stale.encode())
+
+        consumer = Consumer(
+            path=str(dir_ / "*.jsonl"),
+            mode="glob",
+            group="test",
+            topic="stale-idx",
+            offsets_dir=offsets_dir,
+        )
+        with caplog.at_level(logging.WARNING, logger="brooklet"):
+            events = list(consumer)
+
+        # Should re-read all files after reset
+        assert len(events) == 2
+        assert "file_index" in caplog.text.lower() or "out of bounds" in caplog.text.lower()
+
+    def test_glob_file_removed_between_sessions(self, tmp_path, offsets_dir, caplog):
+        """When files are removed between sessions, stale index is detected."""
+        from brooklet.offsets import save
+        from brooklet.types import GlobOffset
+
+        dir_ = tmp_path / "sessions"
+        dir_.mkdir()
+        # Start with 3 files, consume them all
+        for name, event in [
+            ("a.jsonl", {"type": "a"}),
+            ("b.jsonl", {"type": "b"}),
+            ("c.jsonl", {"type": "c"}),
+        ]:
+            with open(dir_ / name, "w") as f:
+                f.write(json.dumps(event) + "\n")
+
+        # Simulate having consumed up through file_index=2 (c.jsonl) with some byte offset
+        stale = GlobOffset(file_index=2, byte_offset=100)
+        save(offsets_dir, "test", "removed", stale.encode())
+
+        # Now remove a.jsonl — only 2 files remain but saved index is 2
+        (dir_ / "a.jsonl").unlink()
+
+        consumer = Consumer(
+            path=str(dir_ / "*.jsonl"),
+            mode="glob",
+            group="test",
+            topic="removed",
+            offsets_dir=offsets_dir,
+        )
+        with caplog.at_level(logging.WARNING, logger="brooklet"):
+            events = list(consumer)
+
+        # file_index=2 is out of bounds for 2 files, should reset and re-read
+        assert len(events) == 2
+        assert "out of bounds" in caplog.text.lower() or "file_index" in caplog.text.lower()
