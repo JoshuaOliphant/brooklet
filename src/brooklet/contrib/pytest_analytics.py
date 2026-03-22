@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import glob as glob_module
+import hashlib
 import sys
 from collections.abc import Iterator
 from dataclasses import dataclass, field
@@ -31,12 +32,15 @@ def parse_test_event(event: dict) -> dict | None:
     if report_type not in RECOGNIZED_REPORT_TYPES:
         return None
 
+    raw_duration = event.get("duration")
+    duration = float(raw_duration) if isinstance(raw_duration, (int, float)) else 0.0
+
     return {
         "report_type": report_type,
         "nodeid": event.get("nodeid"),
         "outcome": event.get("outcome"),
         "when": event.get("when"),
-        "duration": event.get("duration", 0.0),
+        "duration": duration,
         "longrepr": event.get("longrepr"),
     }
 
@@ -136,6 +140,17 @@ def _run_id_from_path(filepath: str) -> str:
     return Path(filepath).stem
 
 
+def _topic_for_path(path: str) -> str:
+    """Derive a unique topic name from a file path or glob pattern.
+
+    Uses a short hash of the absolute path to avoid offset collisions
+    when different files are consumed from the same stream directory.
+    """
+    abs_path = str(Path(path).resolve())
+    short_hash = hashlib.sha256(abs_path.encode()).hexdigest()[:8]
+    return f"pytest/{short_hash}"
+
+
 def scan_runs(
     path: str,
     mode: str = "single-file",
@@ -170,22 +185,32 @@ def scan_runs(
         stream = brooklet.open(parent_dir)
 
     if mode == "single-file":
-        topic = "pytest/results"
+        topic = _topic_for_path(path)
         stream.register(topic, path, mode)
-        events = list(stream.consume(topic, group="pytest-analytics", follow=follow))
-        if events:
-            run_id = _run_id_from_path(path)
-            yield aggregate_run(run_id, events)
+        if follow:
+            # Follow mode: iterate incrementally, yield stats on each batch
+            with stream.consume(topic, group="pytest-analytics", follow=True) as consumer:
+                run_id = _run_id_from_path(path)
+                events: list[dict] = []
+                for event in consumer:
+                    events.append(event)
+                    # Yield updated stats after each event
+                    yield aggregate_run(run_id, events)
+        else:
+            events = list(stream.consume(topic, group="pytest-analytics"))
+            if events:
+                run_id = _run_id_from_path(path)
+                yield aggregate_run(run_id, events)
     elif mode == "glob":
         # Each file is a separate run. Register and consume each file individually
         # so per-run stats stay independent.
         filepaths = sorted(glob_module.glob(path))
         for filepath in filepaths:
             run_id = _run_id_from_path(filepath)
-            per_file_topic = f"pytest/results/{run_id}"
+            per_file_topic = _topic_for_path(filepath)
             stream.register(per_file_topic, filepath, "single-file")
             events = list(
-                stream.consume(per_file_topic, group="pytest-analytics", follow=follow)
+                stream.consume(per_file_topic, group="pytest-analytics")
             )
             if events:
                 yield aggregate_run(run_id, events)

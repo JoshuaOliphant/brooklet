@@ -71,6 +71,16 @@ class TestParseTestEvent:
         assert result["duration"] == 0.0
         assert result["longrepr"] is None
 
+    def test_null_duration_coerced_to_zero(self):
+        event = {"$report_type": "TestReport", "nodeid": "t", "duration": None, "when": "call"}
+        result = parse_test_event(event)
+        assert result["duration"] == 0.0
+
+    def test_string_duration_coerced_to_zero(self):
+        event = {"$report_type": "TestReport", "nodeid": "t", "duration": "bad", "when": "call"}
+        result = parse_test_event(event)
+        assert result["duration"] == 0.0
+
     def test_parse_failed_test_with_longrepr(self):
         event = {
             "$report_type": "TestReport",
