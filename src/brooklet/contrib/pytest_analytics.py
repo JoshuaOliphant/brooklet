@@ -151,6 +151,27 @@ def _topic_for_path(path: str) -> str:
     return f"pytest/{short_hash}"
 
 
+def _parse_file_events(filepath: str) -> list[dict]:
+    """Parse all events from a single pytest-reportlog JSONL file.
+
+    Reads the file directly without brooklet offset tracking.
+    Used in batch mode where we want to see all results every run.
+    """
+    import json
+
+    events = []
+    with open(filepath) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                events.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    return events
+
+
 def scan_runs(
     path: str,
     mode: str = "single-file",
@@ -159,13 +180,15 @@ def scan_runs(
 ) -> Iterator[RunStats]:
     """Scan pytest report log(s) and yield per-run statistics.
 
-    Uses brooklet's consumer API for offset tracking and follow mode.
+    In batch mode (follow=False), reads files directly — no offset tracking,
+    so every invocation sees all results. In follow mode, uses brooklet's
+    consumer API for offset tracking and tailing.
 
     Args:
         path: File path (single-file) or glob pattern (glob mode).
         mode: Either "single-file" or "glob".
-        follow: If True, tail for new events.
-        stream: Optional brooklet Stream to use. Created automatically if not provided.
+        follow: If True, tail for new events via brooklet consumer.
+        stream: Optional brooklet Stream to use (follow mode only).
 
     Raises:
         ValueError: If mode is not "single-file" or "glob".
@@ -180,39 +203,33 @@ def scan_runs(
         msg = f"Report log not found: {path}"
         raise FileNotFoundError(msg)
 
-    if stream is None:
-        parent_dir = str(Path(path).parent)
-        stream = brooklet.open(parent_dir)
+    if follow:
+        # Follow mode: use brooklet consumer for offset tracking and tailing
+        if stream is None:
+            parent_dir = str(Path(path).parent)
+            stream = brooklet.open(parent_dir)
 
-    if mode == "single-file":
         topic = _topic_for_path(path)
         stream.register(topic, path, mode)
-        if follow:
-            # Follow mode: iterate incrementally, yield stats on each batch
-            with stream.consume(topic, group="pytest-analytics", follow=True) as consumer:
-                run_id = _run_id_from_path(path)
-                events: list[dict] = []
-                for event in consumer:
-                    events.append(event)
-                    # Yield updated stats after each event
-                    yield aggregate_run(run_id, events)
-        else:
-            events = list(stream.consume(topic, group="pytest-analytics"))
-            if events:
-                run_id = _run_id_from_path(path)
+        with stream.consume(topic, group="pytest-analytics", follow=True) as consumer:
+            run_id = _run_id_from_path(path)
+            events: list[dict] = []
+            for event in consumer:
+                events.append(event)
                 yield aggregate_run(run_id, events)
+    elif mode == "single-file":
+        # Batch: read file directly, no offsets
+        events = _parse_file_events(path)
+        if events:
+            run_id = _run_id_from_path(path)
+            yield aggregate_run(run_id, events)
     elif mode == "glob":
-        # Each file is a separate run. Register and consume each file individually
-        # so per-run stats stay independent.
+        # Batch: each file is a separate run, read directly
         filepaths = sorted(glob_module.glob(path))
         for filepath in filepaths:
-            run_id = _run_id_from_path(filepath)
-            per_file_topic = _topic_for_path(filepath)
-            stream.register(per_file_topic, filepath, "single-file")
-            events = list(
-                stream.consume(per_file_topic, group="pytest-analytics")
-            )
+            events = _parse_file_events(filepath)
             if events:
+                run_id = _run_id_from_path(filepath)
                 yield aggregate_run(run_id, events)
 
 
