@@ -87,9 +87,11 @@ The `_` prefix avoids collisions with any producer's payload.
 - **Byte offsets** — O(1) resume, no line scanning on restart
 - **Path-style topics** — `"scout/session-stats"` creates nested directories
 
-## Scout (built-in analytics)
+## Built-in Adapters
 
-Brooklet includes `brooklet-scout`, a CLI tool that analyzes Claude Code session JSONL files:
+### Scout (Claude Code analytics)
+
+`brooklet-scout` analyzes Claude Code session JSONL files:
 
 ```bash
 # Scan all sessions for a project
@@ -107,6 +109,29 @@ brooklet-scout ~/.claude/projects/-Users-you-your-project/ --output scout/sessio
 
 Reports token usage, tool call frequency, model breakdown, session duration, and event counts.
 
+### pytest (test run analytics)
+
+`brooklet-pytest` consumes [pytest-reportlog](https://github.com/pytest-dev/pytest-reportlog) JSONL output:
+
+```bash
+# Analyze a single test run
+brooklet-pytest path/to/test-results.jsonl
+
+# Analyze multiple runs (glob mode)
+brooklet-pytest "reports/run-*.jsonl" --glob
+
+# Produce summary stats to a brooklet topic for downstream consumers
+brooklet-pytest "reports/run-*.jsonl" --glob --output pytest/summaries
+```
+
+Reports pass/fail/skip/error counts, total duration, slowest 5 tests, and failure details per run.
+
+To generate the input JSONL, install `pytest-reportlog` and run:
+
+```bash
+pytest --report-log=test-results.jsonl
+```
+
 ## API
 
 | Method | Purpose |
@@ -120,8 +145,8 @@ Reports token usage, tool call frequency, model breakdown, session duration, and
 ## Development
 
 ```bash
-uv run pytest -v          # Run all tests (140 tests)
-uv run pytest tests/bdd/  # BDD acceptance tests (29 scenarios)
+uv run pytest -v          # Run all tests (204 tests)
+uv run pytest tests/bdd/  # BDD acceptance tests (35 scenarios)
 uv run ruff check .       # Lint
 ```
 
