@@ -6,7 +6,7 @@ from pathlib import Path
 from brooklet.stream import Stream
 from brooklet.types import Event, Mode, SourceDef  # noqa: F401
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 
 def open(path: str | Path) -> Stream:

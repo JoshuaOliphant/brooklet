@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import brooklet
+from brooklet.types import Mode
 
 RECOGNIZED_REPORT_TYPES = {"SessionStart", "CollectReport", "TestReport", "SessionFinish"}
 
@@ -174,7 +175,7 @@ def _parse_file_events(filepath: str) -> list[dict]:
 
 def scan_runs(
     path: str,
-    mode: str = "single-file",
+    mode: Mode = "single-file",
     follow: bool = False,
     stream: brooklet.Stream | None = None,
 ) -> Iterator[RunStats]:
