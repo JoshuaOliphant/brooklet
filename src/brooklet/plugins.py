@@ -15,13 +15,20 @@ class BrookletSpec:
         """Register subcommands on the brooklet Typer app."""
 
 
+_pm: pluggy.PluginManager | None = None
+
+
 def get_plugin_manager() -> pluggy.PluginManager:
-    pm = pluggy.PluginManager("brooklet")
-    pm.add_hookspecs(BrookletSpec)
+    """Return the singleton plugin manager, creating it on first call."""
+    global _pm
+    if _pm is not None:
+        return _pm
+    _pm = pluggy.PluginManager("brooklet")
+    _pm.add_hookspecs(BrookletSpec)
     from brooklet.contrib.claude_analytics import ScoutPlugin
     from brooklet.contrib.pytest_analytics import PytestPlugin
 
-    pm.register(ScoutPlugin())
-    pm.register(PytestPlugin())
-    pm.load_setuptools_entrypoints("brooklet")
-    return pm
+    _pm.register(ScoutPlugin())
+    _pm.register(PytestPlugin())
+    _pm.load_setuptools_entrypoints("brooklet")
+    return _pm

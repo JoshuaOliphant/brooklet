@@ -506,17 +506,10 @@ def render_streaming(stats_iter: Iterator[SessionStats], output_file=None) -> st
 
 
 def render_rich(stats_iter: Iterator[SessionStats]) -> None:
-    """Live-updating rich dashboard. Requires rich optional dependency."""
-    try:
-        from rich.console import Console
-        from rich.live import Live
-        from rich.table import Table
-    except ImportError:
-        print(
-            "Error: rich is required for --rich mode. Install with: uv add brooklet[rich]",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+    """Live-updating rich dashboard."""
+    from rich.console import Console
+    from rich.live import Live
+    from rich.table import Table
 
     console = Console()
     cumulative = CumulativeStats()

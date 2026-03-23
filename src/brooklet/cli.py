@@ -106,8 +106,19 @@ def consume(
 
 
 def _load_plugins() -> None:
-    pm = get_plugin_manager()
-    pm.hook.brooklet_commands(cli=app)
+    """Load built-in and third-party plugins onto the app.
+
+    Called at module level so `app` always has plugin commands
+    registered — both at runtime and when imported by tests.
+    """
+    try:
+        pm = get_plugin_manager()
+        pm.hook.brooklet_commands(cli=app)
+    except Exception:
+        import traceback
+
+        print("Warning: failed to load plugins:", file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
 
 
 _load_plugins()
