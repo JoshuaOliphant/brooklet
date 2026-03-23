@@ -67,3 +67,19 @@ def test_scout_scan_delegates_to_scan_sessions(session_dir):
     result = runner.invoke(app, ["scout", "scan", str(session_dir)])
     assert result.exit_code == 0
     assert "session" in result.output.lower() or "events" in result.output.lower()
+
+
+def test_cli_help_shows_core_and_plugin_commands():
+    """brooklet --help shows core commands and plugin subcommands."""
+    from brooklet.cli import app
+
+    result = runner.invoke(app, ["--help"])
+    assert result.exit_code == 0
+    # Core commands
+    assert "register" in result.output
+    assert "produce" in result.output
+    assert "consume" in result.output
+    assert "topics" in result.output
+    # Plugin commands
+    assert "scout" in result.output
+    assert "pytest" in result.output
