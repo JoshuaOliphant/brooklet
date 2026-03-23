@@ -1,5 +1,8 @@
 # brooklet
 
+[![tests](https://github.com/joshuaoliphant/brooklet/actions/workflows/test.yml/badge.svg)](https://github.com/joshuaoliphant/brooklet/actions/workflows/test.yml)
+[![PyPI](https://img.shields.io/pypi/v/brooklet)](https://pypi.org/project/brooklet/)
+
 The SQLite of event streaming — consumer coordination on top of JSONL files.
 
 Brooklet adds **offsets, tailing, and topic discovery** to the append-only JSONL files that tools like Claude Code, structlog, and OpenTelemetry already produce. It doesn't replace your files or add a broker — it just makes them consumable as event streams.
@@ -131,6 +134,19 @@ To generate the input JSONL, install `pytest-reportlog` and run:
 ```bash
 pytest --report-log=test-results.jsonl
 ```
+
+### Pipeline example: CI health gate
+
+The `--output` flag produces structured summaries to a brooklet topic that downstream consumers can read. See [`examples/ci_health_check.py`](examples/ci_health_check.py) for a complete example that gates CI on test health:
+
+```bash
+# Run tests → analyze → produce summaries → health check
+pytest --report-log=reports/results.jsonl
+brooklet-pytest reports/results.jsonl --output pytest/summaries
+python examples/ci_health_check.py reports/
+```
+
+The health check consumes the `pytest/summaries` topic and fails if any run has failures or tests exceeding a duration threshold. This pipeline runs in brooklet's own CI — see [`.github/workflows/test.yml`](.github/workflows/test.yml).
 
 ## API
 

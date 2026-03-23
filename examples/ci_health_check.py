@@ -20,7 +20,6 @@ Exit codes:
 """
 
 import sys
-from pathlib import Path
 
 import brooklet
 

@@ -1,0 +1,39 @@
+name: tests
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - run: uv python install ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Run tests with report logging
+        run: uv run pytest -v --report-log=reports/test-results.jsonl
+
+      - name: Analyze test results with brooklet-pytest
+        run: uv run brooklet-pytest reports/test-results.jsonl
+
+      - name: Produce summaries and run CI health check
+        run: |
+          uv run brooklet-pytest reports/test-results.jsonl --output pytest/summaries
+          uv run python examples/ci_health_check.py reports/
