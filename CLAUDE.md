@@ -15,8 +15,8 @@ Brooklet is a **consumer coordination layer**, not a message broker. External to
 - `__init__.py` — Public API: `brooklet.open(path)`
 
 ### Contrib Adapters (3-layer pattern: parsing → consumer integration → CLI)
-- `contrib/claude_analytics.py` — Claude Code session analytics (`brooklet-scout`)
-- `contrib/pytest_analytics.py` — pytest-reportlog test run analytics (`brooklet-pytest`)
+- `contrib/claude_analytics.py` — Claude Code session analytics (`brooklet scout scan`)
+- `contrib/pytest_analytics.py` — pytest-reportlog test run analytics (`brooklet pytest scan`)
 
 ### Key Decisions
 - `produce()` is in core — consumers that transform and re-emit need a clean write path (DEC-011)

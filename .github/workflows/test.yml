@@ -30,10 +30,10 @@ jobs:
       - name: Run tests with report logging
         run: uv run pytest -v --report-log=reports/test-results.jsonl
 
-      - name: Analyze test results with brooklet-pytest
-        run: uv run brooklet-pytest reports/test-results.jsonl
+      - name: Analyze test results with brooklet
+        run: uv run brooklet pytest scan reports/test-results.jsonl
 
       - name: Produce summaries and run CI health check
         run: |
-          uv run brooklet-pytest reports/test-results.jsonl --output pytest/summaries
+          uv run brooklet pytest scan reports/test-results.jsonl --output pytest/summaries
           uv run python examples/ci_health_check.py reports/
