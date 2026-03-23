@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 from typing import Annotated
 
@@ -53,6 +54,55 @@ def topics(
     else:
         for name in topic_list:
             typer.echo(name)
+
+
+@app.command(rich_help_panel="Core Commands")
+def produce(
+    topic: Annotated[str, typer.Argument(help="Topic name to produce events to.")],
+    stream_dir: STREAM_DIR_OPTION = Path("."),
+    source: Annotated[str | None, typer.Option(help="Producer identifier for _src field.")] = None,
+) -> None:
+    """Produce events to a topic from stdin (one JSON object per line)."""
+    stream = brooklet.open(stream_dir)
+    line_num = 0
+    for line in sys.stdin:
+        line_num += 1
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError as e:
+            typer.echo(f"Warning: skipping line {line_num}: {e}", err=True)
+            continue
+        if not isinstance(event, dict):
+            typer.echo(
+                f"Warning: skipping line {line_num}: "
+                f"expected JSON object, got {type(event).__name__}",
+                err=True,
+            )
+            continue
+        stream.produce(topic, event, source=source)
+
+
+@app.command(rich_help_panel="Core Commands")
+def consume(
+    topic: Annotated[str, typer.Argument(help="Topic name to consume events from.")],
+    group: Annotated[str, typer.Option(help="Consumer group name for offset tracking.")],
+    stream_dir: STREAM_DIR_OPTION = Path("."),
+    follow: Annotated[bool, typer.Option("--follow", help="Tail for new events.")] = False,
+) -> None:
+    """Consume events from a topic to stdout (one JSON object per line)."""
+    stream = brooklet.open(stream_dir)
+    try:
+        with stream.consume(topic, group=group, follow=follow) as consumer:
+            for event in consumer:
+                typer.echo(json.dumps(event))
+    except KeyError:
+        typer.echo(f"Error: topic {topic!r} is not registered", err=True)
+        raise typer.Exit(code=1) from None
+    except KeyboardInterrupt:
+        pass
 
 
 def _load_plugins() -> None:
