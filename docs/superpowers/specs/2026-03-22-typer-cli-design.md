@@ -6,7 +6,7 @@
 
 ## Overview
 
-A unified `brooklet` CLI built with Typer, using pluggy for plugin discovery. Core commands (`produce`, `consume`, `topics`) wrap the library API. Contrib modules (`scout`, `pytest`) register as built-in plugins via the same hookspec interface that third-party packages use.
+A unified `brooklet` CLI built with Typer, using pluggy for plugin discovery. Core commands (`register`, `produce`, `consume`, `topics`) wrap the library API. Contrib modules (`scout`, `pytest`) register as built-in plugins via the same hookspec interface that third-party packages use.
 
 ## Goals
 
@@ -57,12 +57,21 @@ Typer application with core commands. Plugin commands are registered at startup.
 
 **Core commands:**
 
+- `brooklet register <name> <path>` — Register an external JSONL source as a named topic
+  - Options: `--mode [single-file|glob]` (default: `single-file`), `--stream-dir PATH` (default: `.`, env: `BROOKLET_DIR`)
+  - Wraps `stream.register(name, path, mode)`
 - `brooklet produce <topic>` — Read JSON lines from stdin, write to topic
   - Options: `--source NAME`, `--stream-dir PATH` (default: `.`, env: `BROOKLET_DIR`)
+  - Creates the stream directory structure (including `.brooklet/`) if it doesn't exist
+  - Invalid JSON lines are skipped with a warning to stderr; processing continues
 - `brooklet consume <topic> --group <name>` — Read events, write JSON lines to stdout
   - Options: `--follow`, `--stream-dir PATH`
+  - `--group` is required (no default) — explicit consumer identity prevents accidental offset sharing
+  - Uses the `Consumer` context manager to ensure offsets are saved and watchdog observers are cleaned up
 - `brooklet topics` — List registered topics
   - Options: `--stream-dir PATH`, `--json`
+  - Default output: one topic name per line
+  - `--json` output: `["topic1", "topic2"]` (JSON array of topic name strings, matching `stream.topics()` return type)
 
 **Startup flow:**
 
@@ -88,7 +97,7 @@ class ScoutPlugin:
             path: str,
             current: bool = False,
             follow: bool = False,
-            rich: bool = False,
+            dashboard: bool = False,
             window: int = 30,
             output: str | None = None,
         ):
@@ -134,7 +143,7 @@ A package like `brooklet-duckdb` would:
            ...
    ```
 
-2. Declare the entry point in `pyproject.toml`:
+2. Declare the entry point in `pyproject.toml` (must point to a class — pluggy instantiates it):
    ```toml
    [project.entry-points.brooklet]
    duckdb = "brooklet_duckdb:DuckDBPlugin"
@@ -207,14 +216,16 @@ From `tests/pytest_fixtures.py`:
 ### New Test Coverage
 
 **`tests/test_cli.py`** — Core command tests using Typer's `CliRunner`:
-- `produce` reads JSON lines from stdin, writes to topic
+- `register` maps an external JSONL path to a topic name
+- `produce` reads JSON lines from stdin, writes to topic (skips invalid JSON)
 - `consume` outputs JSON lines to stdout
 - `consume --follow` tails for new events
 - `topics` lists registered topics
 - `topics --json` outputs machine-readable JSON
 - `--stream-dir` option overrides default directory
 - `BROOKLET_DIR` env var sets stream directory
-- Error cases: missing topic, invalid JSON input, nonexistent stream dir
+- `register` maps path to topic, verify with `topics`
+- Error cases: missing topic, invalid JSON input (skipped with warning), nonexistent stream dir
 - Pipe roundtrip: produce then consume yields same events
 
 **`tests/test_plugins.py`** — Plugin system tests:
@@ -258,4 +269,4 @@ Users update from:
 - `brooklet-scout <path>` → `brooklet scout scan <path>`
 - `brooklet-pytest <path>` → `brooklet pytest scan <path>`
 
-The old `main()` functions remain importable for backward compatibility but are no longer the primary entry points.
+The old `argparse`-based `main()` functions are removed. The Typer plugin commands replace them entirely. Per project conventions, no backward compatibility shims are kept.
