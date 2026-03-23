@@ -90,41 +90,67 @@ The `_` prefix avoids collisions with any producer's payload.
 - **Byte offsets** — O(1) resume, no line scanning on restart
 - **Path-style topics** — `"scout/session-stats"` creates nested directories
 
-## Built-in Adapters
+## CLI
+
+Brooklet ships a unified CLI with core commands and plugin subcommands:
+
+```bash
+# Core commands — pipe-friendly Unix citizens
+echo '{"type":"hello"}' | brooklet produce my-topic --stream-dir ./streams
+brooklet consume my-topic --group reader --stream-dir ./streams | jq '.'
+brooklet register sessions "~/.claude/projects/*/*.jsonl" --mode glob --stream-dir ./streams
+brooklet topics --stream-dir ./streams --json
+```
+
+Set `BROOKLET_DIR` to avoid repeating `--stream-dir`:
+
+```bash
+export BROOKLET_DIR=./streams
+echo '{"event":"test"}' | brooklet produce events
+brooklet consume events --group reader
+```
+
+### Plugin system
+
+Brooklet uses [pluggy](https://pluggy.readthedocs.io/) for plugin discovery. Built-in plugins (`scout`, `pytest`) and third-party plugins use the same interface. Third-party packages register via entry points:
+
+```toml
+# In your package's pyproject.toml
+[project.entry-points.brooklet]
+my-plugin = "my_package:MyPlugin"
+```
 
 ### Scout (Claude Code analytics)
 
-`brooklet-scout` analyzes Claude Code session JSONL files:
-
 ```bash
 # Scan all sessions for a project
-brooklet-scout ~/.claude/projects/-Users-you-your-project/
+brooklet scout scan ~/.claude/projects/-Users-you-your-project/
 
 # Current session only
-brooklet-scout ~/.claude/projects/-Users-you-your-project/ --current
+brooklet scout scan ~/.claude/projects/-Users-you-your-project/ --current
 
-# Live dashboard (requires rich: pip install brooklet[rich])
-brooklet-scout ~/.claude/projects/-Users-you-your-project/ --current --follow --rich
+# Live dashboard
+brooklet scout scan ~/.claude/projects/-Users-you-your-project/ --current --follow --dashboard
 
 # Produce stats as JSONL for downstream consumers
-brooklet-scout ~/.claude/projects/-Users-you-your-project/ --output scout/session-stats
+brooklet scout scan ~/.claude/projects/-Users-you-your-project/ --output scout/session-stats
 ```
 
 Reports token usage, tool call frequency, model breakdown, session duration, and event counts.
 
 ### pytest (test run analytics)
 
-`brooklet-pytest` consumes [pytest-reportlog](https://github.com/pytest-dev/pytest-reportlog) JSONL output:
+Consumes [pytest-reportlog](https://github.com/pytest-dev/pytest-reportlog) JSONL output:
 
 ```bash
 # Analyze a single test run
-brooklet-pytest path/to/test-results.jsonl
+brooklet pytest scan path/to/test-results.jsonl
 
 # Analyze multiple runs (glob mode)
-brooklet-pytest "reports/run-*.jsonl" --glob
+brooklet pytest scan "reports/run-*.jsonl" --glob
 
 # Produce summary stats to a brooklet topic for downstream consumers
-brooklet-pytest "reports/run-*.jsonl" --glob --output pytest/summaries
+brooklet pytest scan "reports/run-*.jsonl" --glob --output pytest/summaries
 ```
 
 Reports pass/fail/skip/error counts, total duration, slowest 5 tests, and failure details per run.
@@ -142,7 +168,7 @@ The `--output` flag produces structured summaries to a brooklet topic that downs
 ```bash
 # Run tests → analyze → produce summaries → health check
 pytest --report-log=reports/results.jsonl
-brooklet-pytest reports/results.jsonl --output pytest/summaries
+brooklet pytest scan reports/results.jsonl --output pytest/summaries
 python examples/ci_health_check.py reports/
 ```
 
@@ -161,7 +187,7 @@ The health check consumes the `pytest/summaries` topic and fails if any run has 
 ## Development
 
 ```bash
-uv run pytest -v          # Run all tests (204 tests)
+uv run pytest -v          # Run all tests (226 tests)
 uv run pytest tests/bdd/  # BDD acceptance tests (35 scenarios)
 uv run ruff check .       # Lint
 ```
