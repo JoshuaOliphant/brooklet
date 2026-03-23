@@ -235,6 +235,7 @@ def scan_sessions(
         return
 
     if current:
+
         def _safe_mtime(p: Path) -> float:
             try:
                 return p.stat().st_mtime
@@ -466,14 +467,12 @@ def render_cumulative_block(cumulative: CumulativeStats) -> str:
         avg_events = cumulative.total_events / cumulative.session_count
         avg_duration = cumulative.total_duration_s / cumulative.session_count
         duration_str = f"avg={_format_duration(avg_duration)} duration"
-        if (cumulative.total_duration_s > 0
-                and cumulative.total_active_duration_s < cumulative.total_duration_s * 0.9):
-            duration_str += (
-                f" (active: {_format_duration(cumulative.total_active_duration_s)})"
-            )
-        lines.append(
-            f"  sessions: avg={avg_events:.0f} events, {duration_str}"
-        )
+        if (
+            cumulative.total_duration_s > 0
+            and cumulative.total_active_duration_s < cumulative.total_duration_s * 0.9
+        ):
+            duration_str += f" (active: {_format_duration(cumulative.total_active_duration_s)})"
+        lines.append(f"  sessions: avg={avg_events:.0f} events, {duration_str}")
 
     return "\n".join(lines)
 
@@ -510,8 +509,10 @@ def render_rich(stats_iter: Iterator[SessionStats]) -> None:
         from rich.live import Live
         from rich.table import Table
     except ImportError:
-        print("Error: rich is required for --rich mode. Install with: uv add brooklet[rich]",
-              file=sys.stderr)
+        print(
+            "Error: rich is required for --rich mode. Install with: uv add brooklet[rich]",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     console = Console()
@@ -530,8 +531,8 @@ def render_rich(stats_iter: Iterator[SessionStats]) -> None:
 
         for s in sessions:
             top_tools = ", ".join(
-                f"{name}({c})" for name, c in
-                sorted(s.tools.items(), key=lambda x: x[1], reverse=True)[:3]
+                f"{name}({c})"
+                for name, c in sorted(s.tools.items(), key=lambda x: x[1], reverse=True)[:3]
             )
             dur_str = _format_duration(s.duration_s)
             if s.duration_s > 0 and s.active_duration_s < s.duration_s * 0.9:
@@ -663,3 +664,9 @@ def main(argv: list[str] | None = None) -> None:
             render_streaming(stats_iter)
     except KeyboardInterrupt:
         pass
+
+
+class ScoutPlugin:
+    """Pluggy plugin that registers scout CLI commands."""
+
+    pass

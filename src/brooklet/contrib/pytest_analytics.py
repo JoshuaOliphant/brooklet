@@ -110,10 +110,12 @@ def aggregate_run(run_id: str, events: list[dict]) -> RunStats:
             stats.passed += 1
         elif outcome == "failed":
             stats.failed += 1
-            stats.failures.append({
-                "nodeid": result["nodeid"],
-                "longrepr": result.get("longrepr") or "",
-            })
+            stats.failures.append(
+                {
+                    "nodeid": result["nodeid"],
+                    "longrepr": result.get("longrepr") or "",
+                }
+            )
         elif outcome == "skipped":
             stats.skipped += 1
         elif outcome == "error":
@@ -123,10 +125,7 @@ def aggregate_run(run_id: str, events: list[dict]) -> RunStats:
 
     # Slowest 5 tests by duration (descending)
     by_duration = sorted(parsed_results, key=lambda r: r.get("duration", 0.0), reverse=True)
-    stats.slowest = [
-        {"nodeid": r["nodeid"], "duration": r["duration"]}
-        for r in by_duration[:5]
-    ]
+    stats.slowest = [{"nodeid": r["nodeid"], "duration": r["duration"]} for r in by_duration[:5]]
 
     return stats
 
@@ -290,9 +289,7 @@ def render_cumulative(runs: list[RunStats]) -> str:
     lines = []
     lines.append(f"\n=== {len(runs)} runs totals ===")
     lines.append(
-        f"  {total} tests: "
-        f"{passed} passed, {failed} failed, "
-        f"{skipped} skipped, {errored} errored"
+        f"  {total} tests: {passed} passed, {failed} failed, {skipped} skipped, {errored} errored"
     )
     lines.append(f"  duration: {_format_duration(duration)}")
     return "\n".join(lines)
@@ -367,3 +364,9 @@ def main(argv: list[str] | None = None) -> None:
     except (FileNotFoundError, ValueError) as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
+
+
+class PytestPlugin:
+    """Pluggy plugin that registers pytest CLI commands."""
+
+    pass
