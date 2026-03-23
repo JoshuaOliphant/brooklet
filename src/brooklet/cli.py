@@ -12,6 +12,7 @@ import typer
 
 import brooklet
 from brooklet.plugins import get_plugin_manager
+from brooklet.types import Mode
 
 app = typer.Typer(
     name="brooklet",
@@ -33,7 +34,7 @@ STREAM_DIR_OPTION = Annotated[
 def register(
     name: Annotated[str, typer.Argument(help="Topic name to register.")],
     path: Annotated[str, typer.Argument(help="File path or glob pattern.")],
-    mode: Annotated[str, typer.Option(help="Source mode: single-file or glob.")] = "single-file",
+    mode: Annotated[Mode, typer.Option(help="Source mode: single-file or glob.")] = "single-file",
     stream_dir: STREAM_DIR_OPTION = Path("."),
 ) -> None:
     """Register an external JSONL source as a named topic."""

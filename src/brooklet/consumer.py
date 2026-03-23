@@ -132,7 +132,7 @@ class Consumer:
             if event is not None:
                 yield event
 
-    def _catch_up_glob(self, files: list[str]) -> None:
+    def _catch_up_glob(self, files: list[str]) -> Iterator[Event]:
         """Read all unread events from glob-matched files, updating offset.
 
         Shared between batch glob and glob+follow modes. During follow mode,
