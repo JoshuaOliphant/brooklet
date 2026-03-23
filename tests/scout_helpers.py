@@ -13,12 +13,15 @@ def make_session_event(event_type, session_id, timestamp, **kwargs):
     }
     if event_type == "assistant":
         model = kwargs.get("model", "claude-opus-4-6")
-        usage = kwargs.get("usage", {
-            "input_tokens": 1000,
-            "output_tokens": 500,
-            "cache_read_input_tokens": 300,
-            "cache_creation_input_tokens": 200,
-        })
+        usage = kwargs.get(
+            "usage",
+            {
+                "input_tokens": 1000,
+                "output_tokens": 500,
+                "cache_read_input_tokens": 300,
+                "cache_creation_input_tokens": 200,
+            },
+        )
         content = kwargs.get("content", [{"type": "text", "text": "response"}])
         event["message"] = {
             "model": model,

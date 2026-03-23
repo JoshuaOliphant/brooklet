@@ -15,3 +15,9 @@ wheels/
 
 # Runtime logs
 logs/
+
+# Generated data files
+test-results.jsonl
+reports/
+.brooklet/sources.json
+.brooklet/offsets/

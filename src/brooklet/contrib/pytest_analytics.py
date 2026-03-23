@@ -3,6 +3,8 @@
 
 import glob as glob_module
 import hashlib
+import json
+import sys
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -157,18 +159,25 @@ def _parse_file_events(filepath: str) -> list[dict]:
     Reads the file directly without brooklet offset tracking.
     Used in batch mode where we want to see all results every run.
     """
-    import json
-
     events = []
+    skipped_lines = 0
+    total_lines = 0
     with open(filepath) as f:
         for line in f:
             line = line.strip()
             if not line:
                 continue
+            total_lines += 1
             try:
                 events.append(json.loads(line))
             except json.JSONDecodeError:
+                skipped_lines += 1
                 continue
+    if skipped_lines and total_lines:
+        print(
+            f"Warning: {filepath}: {skipped_lines}/{total_lines} lines failed JSON parsing",
+            file=sys.stderr,
+        )
     return events
 
 

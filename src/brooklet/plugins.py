@@ -32,3 +32,9 @@ def get_plugin_manager() -> pluggy.PluginManager:
     _pm.register(PytestPlugin())
     _pm.load_setuptools_entrypoints("brooklet")
     return _pm
+
+
+def reset_plugin_manager() -> None:
+    """Reset the singleton plugin manager. Used by tests to avoid state leaks."""
+    global _pm
+    _pm = None

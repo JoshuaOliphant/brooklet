@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 from typing import Annotated
 
+import pluggy
 import typer
 
 import brooklet
@@ -83,7 +84,11 @@ def produce(
                 err=True,
             )
             continue
-        stream.produce(topic, event, source=source)
+        try:
+            stream.produce(topic, event, source=source)
+        except (OSError, ValueError, TypeError) as e:
+            typer.echo(f"Error: failed to produce to {topic!r}: {e}", err=True)
+            raise typer.Exit(code=1) from None
 
 
 @app.command(rich_help_panel="Core Commands")
@@ -96,12 +101,14 @@ def consume(
     """Consume events from a topic to stdout (one JSON object per line)."""
     stream = brooklet.open(stream_dir)
     try:
-        with stream.consume(topic, group=group, follow=follow) as consumer:
-            for event in consumer:
-                typer.echo(json.dumps(event))
+        consumer_ctx = stream.consume(topic, group=group, follow=follow)
     except KeyError:
         typer.echo(f"Error: topic {topic!r} is not registered", err=True)
         raise typer.Exit(code=1) from None
+    try:
+        with consumer_ctx as consumer:
+            for event in consumer:
+                typer.echo(json.dumps(event))
     except KeyboardInterrupt:
         pass
 
@@ -109,17 +116,13 @@ def consume(
 def _load_plugins() -> None:
     """Load built-in and third-party plugins onto the app.
 
-    Called at module level so `app` always has plugin commands
-    registered — both at runtime and when imported by tests.
+    Called at module level so the app always has plugin commands registered.
     """
     try:
         pm = get_plugin_manager()
         pm.hook.brooklet_commands(cli=app)
-    except Exception:
-        import traceback
-
-        print("Warning: failed to load plugins:", file=sys.stderr)
-        traceback.print_exc(file=sys.stderr)
+    except (ImportError, pluggy.PluginValidationError) as e:
+        print(f"Warning: failed to load plugins: {e}", file=sys.stderr)
 
 
 _load_plugins()

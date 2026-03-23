@@ -1,12 +1,25 @@
 # ABOUTME: Tests for brooklet plugin system — hookspec and plugin discovery
 # ABOUTME: Verifies built-in and third-party plugins register commands correctly
 
+import pytest
 import typer
 from typer.testing import CliRunner
 
-from brooklet.plugins import BrookletSpec, get_plugin_manager, hookimpl  # noqa: F401
+from brooklet.plugins import (  # noqa: F401
+    BrookletSpec,
+    get_plugin_manager,
+    hookimpl,
+    reset_plugin_manager,
+)
 
 runner = CliRunner()
+
+
+@pytest.fixture(autouse=True)
+def _clean_plugin_manager():
+    """Reset plugin manager singleton after each test to prevent state leaks."""
+    yield
+    reset_plugin_manager()
 
 
 def test_get_plugin_manager_returns_manager():

@@ -6,14 +6,13 @@ name = "brooklet"
 version = "0.1.1"
 description = "The SQLite of event streaming — consumer coordination on top of JSONL files"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 license = {text = "MIT"}
 authors = [{name = "Joshua Oliphant"}]
 keywords = ["jsonl", "streaming", "events", "consumer", "offsets"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "License :: OSI Approved :: MIT License",
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
 ]
@@ -40,7 +39,7 @@ packages = ["src/brooklet"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP", "B", "C4", "SIM"]

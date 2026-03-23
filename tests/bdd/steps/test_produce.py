@@ -187,7 +187,7 @@ def then_event_has_src(stream, src):
     assert event["_src"] == src
 
 
-@then(parsers.parse('the last written event has _seq set to {seq:d}'))
+@then(parsers.parse("the last written event has _seq set to {seq:d}"))
 def then_last_event_has_seq(stream, seq):
     """Verify _seq value in the last line of the most recent data file."""
     data_files = list(Path(stream._path).rglob("data.jsonl"))
