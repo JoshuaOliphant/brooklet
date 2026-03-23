@@ -48,3 +48,22 @@ def test_third_party_plugin_registers_command():
     result = runner.invoke(app, ["mock-cmd"])
     assert result.exit_code == 0
     assert "mock output" in result.output
+
+
+def test_scout_plugin_registers_commands():
+    from brooklet.contrib.claude_analytics import ScoutPlugin
+
+    app = typer.Typer()
+    plugin = ScoutPlugin()
+    plugin.brooklet_commands(cli=app)
+    result = runner.invoke(app, ["scout", "--help"])
+    assert result.exit_code == 0
+    assert "scan" in result.output
+
+
+def test_scout_scan_delegates_to_scan_sessions(session_dir):
+    from brooklet.cli import app
+
+    result = runner.invoke(app, ["scout", "scan", str(session_dir)])
+    assert result.exit_code == 0
+    assert "session" in result.output.lower() or "events" in result.output.lower()
