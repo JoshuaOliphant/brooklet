@@ -155,6 +155,7 @@ Typer's `rich_help_panel` groups commands in the help output:
 
 ```
 Core Commands:
+  register  Register an external JSONL source as a topic
   produce   Produce events to a topic from stdin
   consume   Consume events from a topic to stdout
   topics    List registered topics
