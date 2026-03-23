@@ -7,7 +7,6 @@ import brooklet as bl
 from brooklet.contrib.pytest_analytics import (
     aggregate_run,
     is_test_result,
-    main,
     parse_test_event,
     render_cumulative,
     render_run_block,
@@ -349,41 +348,63 @@ class TestScanRunsValidation:
 
 
 class TestMainCLI:
-    """Test main() CLI entry point."""
+    """Test pytest Typer CLI commands via the brooklet CLI app."""
 
-    def test_single_file_prints_output(self, tmp_path, capsys):
+    def test_single_file_prints_output(self, tmp_path):
+        from typer.testing import CliRunner
+
+        from brooklet.cli import app
+
+        runner = CliRunner()
         reports_dir = tmp_path / "reports"
         reports_dir.mkdir()
         write_run_file(reports_dir, "cli-test", SINGLE_RUN_EVENTS)
 
-        main([str(reports_dir / "cli-test.jsonl")])
-        captured = capsys.readouterr()
-        assert "cli-test" in captured.out
-        assert "5 tests" in captured.out
-        assert "1 runs totals" in captured.out
+        result = runner.invoke(app, ["pytest", "scan", str(reports_dir / "cli-test.jsonl")])
+        assert result.exit_code == 0
+        assert "cli-test" in result.output
+        assert "5 tests" in result.output
+        assert "1 runs totals" in result.output
 
-    def test_glob_mode_prints_multiple_runs(self, tmp_path, capsys):
+    def test_glob_mode_prints_multiple_runs(self, tmp_path):
+        from typer.testing import CliRunner
+
+        from brooklet.cli import app
+
+        runner = CliRunner()
         reports_dir = tmp_path / "reports"
         reports_dir.mkdir()
         for name, events in MULTI_RUN_EVENTS.items():
             write_run_file(reports_dir, name, events)
 
-        main([str(reports_dir / "run-*.jsonl"), "--glob"])
-        captured = capsys.readouterr()
-        assert "run-001" in captured.out
-        assert "run-002" in captured.out
-        assert "run-003" in captured.out
-        assert "3 runs totals" in captured.out
+        result = runner.invoke(app, ["pytest", "scan", str(reports_dir / "run-*.jsonl"), "--glob"])
+        assert result.exit_code == 0
+        assert "run-001" in result.output
+        assert "run-002" in result.output
+        assert "run-003" in result.output
+        assert "3 runs totals" in result.output
 
-    def test_output_flag_produces_to_topic(self, tmp_path, capsys):
+    def test_output_flag_produces_to_topic(self, tmp_path):
+        from typer.testing import CliRunner
+
+        from brooklet.cli import app
+
+        runner = CliRunner()
         reports_dir = tmp_path / "reports"
         reports_dir.mkdir()
         write_run_file(reports_dir, "output-test", SINGLE_RUN_EVENTS)
 
-        main([
-            str(reports_dir / "output-test.jsonl"),
-            "--output", "pytest/summaries",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "pytest",
+                "scan",
+                str(reports_dir / "output-test.jsonl"),
+                "--output",
+                "pytest/summaries",
+            ],
+        )
+        assert result.exit_code == 0
 
         # Verify events were produced
         stream = bl.open(str(reports_dir))
@@ -392,5 +413,10 @@ class TestMainCLI:
         assert summaries[0]["total"] == 5
 
     def test_missing_file_exits_with_error(self, tmp_path):
-        with pytest.raises(SystemExit):
-            main([str(tmp_path / "nope.jsonl")])
+        from typer.testing import CliRunner
+
+        from brooklet.cli import app
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["pytest", "scan", str(tmp_path / "nope.jsonl")])
+        assert result.exit_code == 1

@@ -1,17 +1,17 @@
 # ABOUTME: pytest-reportlog adapter — consumes pytest JSONL and produces run stats
 # ABOUTME: Exercises brooklet register/consume/produce with a non-Claude-Code source
 
-from __future__ import annotations
-
-import argparse
 import glob as glob_module
 import hashlib
-import sys
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Annotated
+
+import typer
 
 import brooklet
+from brooklet.plugins import hookimpl
 from brooklet.types import Mode
 
 RECOGNIZED_REPORT_TYPES = {"SessionStart", "CollectReport", "TestReport", "SessionFinish"}
@@ -295,78 +295,64 @@ def render_cumulative(runs: list[RunStats]) -> str:
     return "\n".join(lines)
 
 
-def main(argv: list[str] | None = None) -> None:
-    """CLI entry point for brooklet-pytest."""
-    parser = argparse.ArgumentParser(
-        prog="brooklet-pytest",
-        description="Consume pytest-reportlog JSONL and report test analytics.",
-    )
-    parser.add_argument(
-        "path",
-        help="Path to report log file or glob pattern",
-    )
-    parser.add_argument(
-        "--glob",
-        action="store_true",
-        help="Treat path as a glob pattern (each file is a separate run)",
-    )
-    parser.add_argument(
-        "--follow",
-        action="store_true",
-        help="Tail for new test events",
-    )
-    parser.add_argument(
-        "--output",
-        metavar="TOPIC",
-        help="Produce run stats as JSONL events to a brooklet topic",
-    )
-
-    args = parser.parse_args(argv)
-    mode = "glob" if args.glob else "single-file"
-
-    if not args.glob and not Path(args.path).exists():
-        parser.error(f"File not found: {args.path}")
-
-    try:
-        parent_dir = str(Path(args.path).resolve().parent)
-        stream = brooklet.open(parent_dir)
-
-        stats_iter = scan_runs(path=args.path, mode=mode, follow=args.follow, stream=stream)
-
-        if args.output:
-            original_iter = stats_iter
-
-            def producing_iter():
-                for stats in original_iter:
-                    try:
-                        stream.produce(args.output, stats.to_dict(), source="pytest-analytics")
-                    except (OSError, ValueError, TypeError) as e:
-                        print(
-                            f"Warning: failed to produce run {stats.run_id} "
-                            f"to topic {args.output!r}: {e}",
-                            file=sys.stderr,
-                        )
-                    yield stats
-
-            stats_iter = producing_iter()
-
-        runs: list[RunStats] = []
-        for stats in stats_iter:
-            runs.append(stats)
-            print(render_run_block(stats))
-        print(render_cumulative(runs))
-    except KeyboardInterrupt:
-        print(file=sys.stderr)
-        if runs:
-            print(render_cumulative(runs))
-    except BrokenPipeError:
-        pass
-    except (FileNotFoundError, ValueError) as e:
-        print(f"Error: {e}", file=sys.stderr)
-        sys.exit(1)
-
-
 class PytestPlugin:
     """Pluggy plugin that registers pytest CLI commands."""
 
-    pass
+    @hookimpl
+    def brooklet_commands(self, cli):
+        pytest_app = typer.Typer(help="pytest-reportlog analytics")
+
+        @pytest_app.command()
+        def scan(
+            path: Annotated[str, typer.Argument(help="Path to report log file or glob pattern.")],
+            glob: Annotated[bool, typer.Option(help="Treat path as a glob pattern.")] = False,
+            follow: Annotated[bool, typer.Option(help="Tail for new test events.")] = False,
+            output: Annotated[
+                str | None, typer.Option(help="Produce stats to a brooklet topic.")
+            ] = None,
+        ) -> None:
+            """Consume pytest-reportlog JSONL and report test analytics."""
+            mode = "glob" if glob else "single-file"
+
+            if not glob and not Path(path).exists():
+                typer.echo(f"Error: File not found: {path}", err=True)
+                raise typer.Exit(code=1)
+
+            runs: list[RunStats] = []
+            try:
+                parent_dir = str(Path(path).resolve().parent)
+                stream = brooklet.open(parent_dir)
+
+                stats_iter = scan_runs(path=path, mode=mode, follow=follow, stream=stream)
+
+                if output:
+                    original_iter = stats_iter
+
+                    def producing_iter():
+                        for stats in original_iter:
+                            try:
+                                stream.produce(output, stats.to_dict(), source="pytest-analytics")
+                            except (OSError, ValueError, TypeError) as e:
+                                typer.echo(
+                                    f"Warning: failed to produce run {stats.run_id} "
+                                    f"to topic {output!r}: {e}",
+                                    err=True,
+                                )
+                            yield stats
+
+                    stats_iter = producing_iter()
+
+                for stats in stats_iter:
+                    runs.append(stats)
+                    typer.echo(render_run_block(stats))
+                typer.echo(render_cumulative(runs))
+            except KeyboardInterrupt:
+                if runs:
+                    typer.echo(render_cumulative(runs))
+            except BrokenPipeError:
+                pass
+            except (FileNotFoundError, ValueError) as e:
+                typer.echo(f"Error: {e}", err=True)
+                raise typer.Exit(code=1) from None
+
+        cli.add_typer(pytest_app, name="pytest")
