@@ -1,5 +1,5 @@
 # ABOUTME: CI health check that consumes pytest summary events from brooklet
-# ABOUTME: Demonstrates piping brooklet-pytest --output into a downstream consumer
+# ABOUTME: Demonstrates piping brooklet pytest scan --output into a downstream consumer
 
 """CI health check — consumes pytest/summaries topic and gates on test health.
 
@@ -9,7 +9,7 @@ Usage:
     pytest --report-log=reports/run-002.jsonl
 
     # Produce summaries to a brooklet topic
-    brooklet-pytest "reports/run-*.jsonl" --glob --output pytest/summaries
+    brooklet pytest scan "reports/run-*.jsonl" --glob --output pytest/summaries
 
     # Run the health check against the summaries
     uv run examples/ci_health_check.py reports/
@@ -34,11 +34,11 @@ def main() -> int:
     stream_dir = sys.argv[1]
     stream = brooklet.open(stream_dir)
 
-    # Consume the summaries topic produced by brooklet-pytest --output
+    # Consume the summaries topic produced by brooklet pytest scan --output
     try:
         summaries = list(stream.consume("pytest/summaries", group="ci-health-check"))
     except KeyError:
-        print("No pytest/summaries topic found. Run brooklet-pytest --output first.")
+        print("No pytest/summaries topic found. Run brooklet pytest scan --output first.")
         return 1
 
     if not summaries:

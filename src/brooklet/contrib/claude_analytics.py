@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import argparse
 import json
 import sys
 import time
@@ -12,8 +11,12 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from typing import Annotated
+
+import typer
 
 import brooklet
+from brooklet.plugins import hookimpl
 
 # ---------------------------------------------------------------------------
 # Layer 1: Parsing (pure functions, no I/O)
@@ -235,6 +238,7 @@ def scan_sessions(
         return
 
     if current:
+
         def _safe_mtime(p: Path) -> float:
             try:
                 return p.stat().st_mtime
@@ -466,14 +470,12 @@ def render_cumulative_block(cumulative: CumulativeStats) -> str:
         avg_events = cumulative.total_events / cumulative.session_count
         avg_duration = cumulative.total_duration_s / cumulative.session_count
         duration_str = f"avg={_format_duration(avg_duration)} duration"
-        if (cumulative.total_duration_s > 0
-                and cumulative.total_active_duration_s < cumulative.total_duration_s * 0.9):
-            duration_str += (
-                f" (active: {_format_duration(cumulative.total_active_duration_s)})"
-            )
-        lines.append(
-            f"  sessions: avg={avg_events:.0f} events, {duration_str}"
-        )
+        if (
+            cumulative.total_duration_s > 0
+            and cumulative.total_active_duration_s < cumulative.total_duration_s * 0.9
+        ):
+            duration_str += f" (active: {_format_duration(cumulative.total_active_duration_s)})"
+        lines.append(f"  sessions: avg={avg_events:.0f} events, {duration_str}")
 
     return "\n".join(lines)
 
@@ -504,15 +506,10 @@ def render_streaming(stats_iter: Iterator[SessionStats], output_file=None) -> st
 
 
 def render_rich(stats_iter: Iterator[SessionStats]) -> None:
-    """Live-updating rich dashboard. Requires rich optional dependency."""
-    try:
-        from rich.console import Console
-        from rich.live import Live
-        from rich.table import Table
-    except ImportError:
-        print("Error: rich is required for --rich mode. Install with: uv add brooklet[rich]",
-              file=sys.stderr)
-        sys.exit(1)
+    """Live-updating rich dashboard."""
+    from rich.console import Console
+    from rich.live import Live
+    from rich.table import Table
 
     console = Console()
     cumulative = CumulativeStats()
@@ -530,8 +527,8 @@ def render_rich(stats_iter: Iterator[SessionStats]) -> None:
 
         for s in sessions:
             top_tools = ", ".join(
-                f"{name}({c})" for name, c in
-                sorted(s.tools.items(), key=lambda x: x[1], reverse=True)[:3]
+                f"{name}({c})"
+                for name, c in sorted(s.tools.items(), key=lambda x: x[1], reverse=True)[:3]
             )
             dur_str = _format_duration(s.duration_s)
             if s.duration_s > 0 and s.active_duration_s < s.duration_s * 0.9:
@@ -597,69 +594,53 @@ def render_rich(stats_iter: Iterator[SessionStats]) -> None:
 # ---------------------------------------------------------------------------
 
 
-def main(argv: list[str] | None = None) -> None:
-    """CLI entry point for brooklet-scout."""
-    parser = argparse.ArgumentParser(
-        prog="brooklet-scout",
-        description="Scan Claude Code session JSONL files and report analytics.",
-    )
-    parser.add_argument(
-        "path",
-        help="Path to Claude Code project directory containing session JSONL files",
-    )
-    parser.add_argument(
-        "--current",
-        action="store_true",
-        help="Only process sessions modified within the --window time range",
-    )
-    parser.add_argument(
-        "--follow",
-        action="store_true",
-        help="Tail for new sessions/events",
-    )
-    parser.add_argument(
-        "--rich",
-        action="store_true",
-        help="Display a live-updating rich dashboard",
-    )
-    parser.add_argument(
-        "--window",
-        type=int,
-        default=30,
-        metavar="MINUTES",
-        help="Time window for --current mode (default: 30 minutes)",
-    )
-    parser.add_argument(
-        "--output",
-        metavar="TOPIC",
-        help="Produce session stats as JSONL events to a brooklet topic",
-    )
+class ScoutPlugin:
+    """Pluggy plugin that registers scout CLI commands."""
 
-    args = parser.parse_args(argv)
+    @hookimpl
+    def brooklet_commands(self, cli):
+        scout_app = typer.Typer(help="Claude Code session analytics")
 
-    stats_iter = scan_sessions(
-        path=args.path,
-        follow=args.follow,
-        current=args.current,
-        window_minutes=args.window,
-    )
+        @scout_app.command()
+        def scan(
+            path: Annotated[str, typer.Argument(help="Path to Claude Code project directory.")],
+            current: Annotated[bool, typer.Option(help="Only process recent sessions.")] = False,
+            follow: Annotated[bool, typer.Option(help="Tail for new sessions/events.")] = False,
+            dashboard: Annotated[
+                bool, typer.Option(help="Display a live-updating rich dashboard.")
+            ] = False,
+            window: Annotated[
+                int, typer.Option(help="Time window in minutes for --current mode.")
+            ] = 30,
+            output: Annotated[
+                str | None, typer.Option(help="Produce stats to a brooklet topic.")
+            ] = None,
+        ) -> None:
+            """Scan Claude Code session JSONL files and report analytics."""
+            stats_iter = scan_sessions(
+                path=path,
+                follow=follow,
+                current=current,
+                window_minutes=window,
+            )
 
-    # If --output is specified, wrap the iterator to produce events
-    if args.output:
-        stream = brooklet.open(args.path)
-        original_iter = stats_iter
+            if output:
+                stream = brooklet.open(path)
+                original_iter = stats_iter
 
-        def producing_iter():
-            for stats in original_iter:
-                stream.produce(args.output, stats.to_dict(), source="scout")
-                yield stats
+                def producing_iter():
+                    for stats in original_iter:
+                        stream.produce(output, stats.to_dict(), source="scout")
+                        yield stats
 
-        stats_iter = producing_iter()
+                stats_iter = producing_iter()
 
-    try:
-        if args.rich:
-            render_rich(stats_iter)
-        else:
-            render_streaming(stats_iter)
-    except KeyboardInterrupt:
-        pass
+            try:
+                if dashboard:
+                    render_rich(stats_iter)
+                else:
+                    render_streaming(stats_iter)
+            except KeyboardInterrupt:
+                pass
+
+        cli.add_typer(scout_app, name="scout")

@@ -153,18 +153,30 @@ def when_scout_scans(ctx):
 @when("2 new session files appear")
 def when_2_new_sessions(ctx):
     """Create 2 new session files."""
-    write_session_file(ctx["session_dir"], "ffff6666-0000-0000-0000-000000000006", [
-        make_session_event("user", "ffff6666-0000-0000-0000-000000000006",
-                           "2026-03-15T07:00:00Z"),
-        make_session_event("assistant", "ffff6666-0000-0000-0000-000000000006",
-                           "2026-03-15T07:10:00Z"),
-    ])
-    write_session_file(ctx["session_dir"], "gggg7777-0000-0000-0000-000000000007", [
-        make_session_event("user", "gggg7777-0000-0000-0000-000000000007",
-                           "2026-03-15T08:00:00Z"),
-        make_session_event("assistant", "gggg7777-0000-0000-0000-000000000007",
-                           "2026-03-15T08:05:00Z"),
-    ])
+    write_session_file(
+        ctx["session_dir"],
+        "ffff6666-0000-0000-0000-000000000006",
+        [
+            make_session_event(
+                "user", "ffff6666-0000-0000-0000-000000000006", "2026-03-15T07:00:00Z"
+            ),
+            make_session_event(
+                "assistant", "ffff6666-0000-0000-0000-000000000006", "2026-03-15T07:10:00Z"
+            ),
+        ],
+    )
+    write_session_file(
+        ctx["session_dir"],
+        "gggg7777-0000-0000-0000-000000000007",
+        [
+            make_session_event(
+                "user", "gggg7777-0000-0000-0000-000000000007", "2026-03-15T08:00:00Z"
+            ),
+            make_session_event(
+                "assistant", "gggg7777-0000-0000-0000-000000000007", "2026-03-15T08:05:00Z"
+            ),
+        ],
+    )
 
 
 @when("scout scans the project directory again")
@@ -363,6 +375,7 @@ def then_can_follow(ctx):
     # Test that scan_sessions accepts follow+current without error
     # by verifying the parameter signature works
     import inspect
+
     sig = inspect.signature(scan_sessions)
     assert "follow" in sig.parameters
     assert "current" in sig.parameters
@@ -375,6 +388,7 @@ def then_batch_extendable(ctx):
     # Follow mode uses the same scan_sessions with follow=True
     # The batch path processes all files, follow would tail for new ones
     import inspect
+
     sig = inspect.signature(scan_sessions)
     assert "follow" in sig.parameters
 

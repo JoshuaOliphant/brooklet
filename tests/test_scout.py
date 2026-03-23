@@ -294,24 +294,36 @@ class TestScanSessions:
 
         now = time.time()
         # File 1: modified 10 minutes ago (within window)
-        f1 = write_session_file(sessions, "session-recent-1", [
-            make_session_event("user", "session-recent-1", "2026-03-15T02:00:00Z"),
-            make_session_event("assistant", "session-recent-1", "2026-03-15T02:01:00Z"),
-        ])
+        f1 = write_session_file(
+            sessions,
+            "session-recent-1",
+            [
+                make_session_event("user", "session-recent-1", "2026-03-15T02:00:00Z"),
+                make_session_event("assistant", "session-recent-1", "2026-03-15T02:01:00Z"),
+            ],
+        )
         os.utime(f1, (now - 600, now - 600))
 
         # File 2: modified 5 minutes ago (within window)
-        f2 = write_session_file(sessions, "session-recent-2", [
-            make_session_event("user", "session-recent-2", "2026-03-15T03:00:00Z"),
-            make_session_event("assistant", "session-recent-2", "2026-03-15T03:01:00Z"),
-        ])
+        f2 = write_session_file(
+            sessions,
+            "session-recent-2",
+            [
+                make_session_event("user", "session-recent-2", "2026-03-15T03:00:00Z"),
+                make_session_event("assistant", "session-recent-2", "2026-03-15T03:01:00Z"),
+            ],
+        )
         os.utime(f2, (now - 300, now - 300))
 
         # File 3: modified 2 hours ago (outside window)
-        f3 = write_session_file(sessions, "session-old", [
-            make_session_event("user", "session-old", "2026-03-15T00:00:00Z"),
-            make_session_event("assistant", "session-old", "2026-03-15T00:01:00Z"),
-        ])
+        f3 = write_session_file(
+            sessions,
+            "session-old",
+            [
+                make_session_event("user", "session-old", "2026-03-15T00:00:00Z"),
+                make_session_event("assistant", "session-old", "2026-03-15T00:01:00Z"),
+            ],
+        )
         os.utime(f3, (now - 7200, now - 7200))
 
         stats = list(scan_sessions(str(sessions), current=True))
@@ -326,16 +338,24 @@ class TestScanSessions:
         sessions.mkdir()
 
         now = time.time()
-        f1 = write_session_file(sessions, "session-a", [
-            make_session_event("user", "session-a", "2026-03-15T02:00:00Z"),
-            make_session_event("assistant", "session-a", "2026-03-15T02:01:00Z"),
-        ])
+        f1 = write_session_file(
+            sessions,
+            "session-a",
+            [
+                make_session_event("user", "session-a", "2026-03-15T02:00:00Z"),
+                make_session_event("assistant", "session-a", "2026-03-15T02:01:00Z"),
+            ],
+        )
         os.utime(f1, (now - 60, now - 60))
 
-        f2 = write_session_file(sessions, "session-b", [
-            make_session_event("user", "session-b", "2026-03-15T03:00:00Z"),
-            make_session_event("assistant", "session-b", "2026-03-15T03:01:00Z"),
-        ])
+        f2 = write_session_file(
+            sessions,
+            "session-b",
+            [
+                make_session_event("user", "session-b", "2026-03-15T03:00:00Z"),
+                make_session_event("assistant", "session-b", "2026-03-15T03:01:00Z"),
+            ],
+        )
         os.utime(f2, (now - 10, now - 10))
 
         stats = list(scan_sessions(str(sessions), current=True, window_minutes=0))
@@ -348,10 +368,14 @@ class TestScanSessions:
         sessions.mkdir()
 
         old_time = time.time() - 7200  # 2 hours ago
-        f1 = write_session_file(sessions, "session-old", [
-            make_session_event("user", "session-old", "2026-03-15T00:00:00Z"),
-            make_session_event("assistant", "session-old", "2026-03-15T00:01:00Z"),
-        ])
+        f1 = write_session_file(
+            sessions,
+            "session-old",
+            [
+                make_session_event("user", "session-old", "2026-03-15T00:00:00Z"),
+                make_session_event("assistant", "session-old", "2026-03-15T00:01:00Z"),
+            ],
+        )
         os.utime(f1, (old_time, old_time))
 
         stats = list(scan_sessions(str(sessions), current=True, window_minutes=5))
@@ -367,17 +391,19 @@ class TestScanSessions:
         sessions.mkdir()
 
         # Start with one file
-        write_session_file(sessions, "session-initial", [
-            make_session_event("user", "session-initial", "2026-03-15T02:00:00Z"),
-            make_session_event("assistant", "session-initial", "2026-03-15T02:01:00Z"),
-        ])
+        write_session_file(
+            sessions,
+            "session-initial",
+            [
+                make_session_event("user", "session-initial", "2026-03-15T02:00:00Z"),
+                make_session_event("assistant", "session-initial", "2026-03-15T02:01:00Z"),
+            ],
+        )
 
         collected: list = []
 
         def collect_stats():
-            for stats in scan_sessions(
-                str(sessions), current=True, follow=True, window_minutes=30
-            ):
+            for stats in scan_sessions(str(sessions), current=True, follow=True, window_minutes=30):
                 collected.append(stats)
                 if len(collected) >= 2:
                     break
@@ -387,10 +413,14 @@ class TestScanSessions:
 
         # Wait for initial parse, then add a new file
         time.sleep(3)
-        write_session_file(sessions, "session-new", [
-            make_session_event("user", "session-new", "2026-03-15T03:00:00Z"),
-            make_session_event("assistant", "session-new", "2026-03-15T03:01:00Z"),
-        ])
+        write_session_file(
+            sessions,
+            "session-new",
+            [
+                make_session_event("user", "session-new", "2026-03-15T03:00:00Z"),
+                make_session_event("assistant", "session-new", "2026-03-15T03:01:00Z"),
+            ],
+        )
 
         thread.join(timeout=10)
         assert len(collected) >= 2
@@ -406,18 +436,20 @@ class TestScanSessions:
         sessions.mkdir()
 
         # Create a file that's just barely inside a 1-second window
-        f1 = write_session_file(sessions, "session-ephemeral", [
-            make_session_event("user", "session-ephemeral", "2026-03-15T02:00:00Z"),
-            make_session_event("assistant", "session-ephemeral", "2026-03-15T02:01:00Z"),
-        ])
+        f1 = write_session_file(
+            sessions,
+            "session-ephemeral",
+            [
+                make_session_event("user", "session-ephemeral", "2026-03-15T02:00:00Z"),
+                make_session_event("assistant", "session-ephemeral", "2026-03-15T02:01:00Z"),
+            ],
+        )
 
         collected: list = []
 
         def collect_stats():
             # Use a very small window so the file ages out quickly
-            for stats in scan_sessions(
-                str(sessions), current=True, follow=True, window_minutes=1
-            ):
+            for stats in scan_sessions(str(sessions), current=True, follow=True, window_minutes=1):
                 collected.append(stats)
                 if stats.removed:
                     break
