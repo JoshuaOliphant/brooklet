@@ -319,6 +319,14 @@ class PytestPlugin:
             output: Annotated[
                 str | None, typer.Option(help="Produce stats to a brooklet topic.")
             ] = None,
+            stream_dir: Annotated[
+                Path | None,
+                typer.Option(
+                    "--stream-dir",
+                    envvar="BROOKLET_DIR",
+                    help="Stream directory for --output topic. Defaults to report file's parent.",
+                ),
+            ] = None,
         ) -> None:
             """Consume pytest-reportlog JSONL and report test analytics."""
             mode = "glob" if glob else "single-file"
@@ -330,7 +338,7 @@ class PytestPlugin:
             runs: list[RunStats] = []
             try:
                 parent_dir = str(Path(path).resolve().parent)
-                stream = brooklet.open(parent_dir)
+                stream = brooklet.open(str(stream_dir) if stream_dir else parent_dir)
 
                 stats_iter = scan_runs(path=path, mode=mode, follow=follow, stream=stream)
 

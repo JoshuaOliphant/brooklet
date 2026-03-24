@@ -82,6 +82,71 @@ def test_scout_scan_delegates_to_scan_sessions(session_dir):
     assert "session" in result.output.lower() or "events" in result.output.lower()
 
 
+def test_scout_scan_output_uses_stream_dir(session_dir, tmp_path):
+    """scout scan --output writes to --stream-dir, not the sessions directory."""
+    import brooklet
+    from brooklet.cli import app
+
+    stream_dir = tmp_path / "streams"
+    stream_dir.mkdir()
+
+    result = runner.invoke(
+        app,
+        [
+            "scout",
+            "scan",
+            str(session_dir),
+            "--output",
+            "scout/stats",
+            "--stream-dir",
+            str(stream_dir),
+        ],
+    )
+    assert result.exit_code == 0
+
+    # Topic should be in the stream dir, not the sessions dir
+    stream = brooklet.open(stream_dir)
+    assert "scout/stats" in stream.topics()
+
+    # Should NOT have created .brooklet in the sessions dir
+    assert (
+        not (session_dir / ".brooklet" / "sources.json").exists()
+        or "scout/stats" not in brooklet.open(session_dir).topics()
+    )
+
+
+def test_pytest_scan_output_uses_stream_dir(tmp_path):
+    """pytest scan --output writes to --stream-dir, not the report file's parent."""
+    import brooklet
+    from brooklet.cli import app
+    from tests.pytest_fixtures import SINGLE_RUN_EVENTS, write_run_file
+
+    report_dir = tmp_path / "reports"
+    report_dir.mkdir()
+    write_run_file(report_dir, "test-run", SINGLE_RUN_EVENTS)
+    report_path = report_dir / "test-run.jsonl"
+
+    stream_dir = tmp_path / "streams"
+    stream_dir.mkdir()
+
+    result = runner.invoke(
+        app,
+        [
+            "pytest",
+            "scan",
+            str(report_path),
+            "--output",
+            "pytest/summaries",
+            "--stream-dir",
+            str(stream_dir),
+        ],
+    )
+    assert result.exit_code == 0
+
+    stream = brooklet.open(stream_dir)
+    assert "pytest/summaries" in stream.topics()
+
+
 def test_cli_help_shows_core_and_plugin_commands():
     """brooklet --help shows core commands and plugin subcommands."""
     from brooklet.cli import app
