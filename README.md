@@ -10,7 +10,9 @@ Brooklet adds **offsets, tailing, and topic discovery** to the append-only JSONL
 ## Install
 
 ```bash
-pip install brooklet   # or: uv add brooklet
+uv add brooklet             # as a library dependency
+uv tool install brooklet    # as a global CLI tool
+pip install brooklet        # or with pip
 ```
 
 ## Quickstart
