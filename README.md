@@ -176,6 +176,44 @@ python examples/ci_health_check.py reports/
 
 The health check consumes the `pytest/summaries` topic and fails if any run has failures or tests exceeding a duration threshold. This pipeline runs in brooklet's own CI — see [`.github/workflows/test.yml`](.github/workflows/test.yml).
 
+## Try It
+
+### Pipe anything through brooklet
+
+```bash
+# Git log as a consumable stream
+git log --format='{"hash":"%h","author":"%an","date":"%aI","msg":"%s"}' -20 \
+  | brooklet produce git/log --stream-dir ./demo
+
+# Consume and transform with jq
+brooklet consume git/log --group viewer --stream-dir ./demo \
+  | jq -r '"\(.date[0:10]) \(.hash) \(.msg[0:60])"'
+
+# System processes as events
+ps aux | awk 'NR>1 {printf "{\"user\":\"%s\",\"pid\":%s,\"cpu\":%s}\n",$1,$2,$3}' \
+  | brooklet produce system/procs --stream-dir ./demo
+
+# Weather as a stream (via wttr.in)
+curl -s "wttr.in/YourCity?format=j1" \
+  | jq -c '{temp: .current_condition[0].temp_F, desc: .current_condition[0].weatherDesc[0].value}' \
+  | brooklet produce weather --stream-dir ./demo --source wttr
+```
+
+### Offset tracking just works
+
+```bash
+# First consume reads everything
+brooklet consume git/log --group reader --stream-dir ./demo | wc -l  # → 20
+
+# Second consume reads nothing (already caught up)
+brooklet consume git/log --group reader --stream-dir ./demo | wc -l  # → 0
+
+# Different group = independent position
+brooklet consume git/log --group other --stream-dir ./demo | wc -l   # → 20
+```
+
+**Tip:** Use `jq -c` when piping pretty-printed JSON into `brooklet produce` — brooklet reads one JSON object per line.
+
 ## API
 
 | Method | Purpose |
