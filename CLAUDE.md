@@ -54,6 +54,7 @@ uv run ruff format .          # Format
 - All `.py` files start with 2-line `ABOUTME:` comment
 - TDD: tests first, then minimal implementation
 - Simple over clever — readability is the priority
+- Before adding new tests or fixtures, check for existing ones in `tests/conftest.py`, `tests/pytest_fixtures.py`, and `tests/scout_helpers.py` to avoid duplication
 
 ## Non-Interactive Shell Commands
 
