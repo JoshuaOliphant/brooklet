@@ -638,7 +638,14 @@ class ScoutPlugin:
 
                 def producing_iter():
                     for stats in original_iter:
-                        stream.produce(output, stats.to_dict(), source="scout")
+                        try:
+                            stream.produce(output, stats.to_dict(), source="scout")
+                        except (OSError, ValueError, TypeError) as e:
+                            typer.echo(
+                                f"Warning: failed to produce session {stats.session_id} "
+                                f"to topic {output!r}: {e}",
+                                err=True,
+                            )
                         yield stats
 
                 stats_iter = producing_iter()
