@@ -615,6 +615,14 @@ class ScoutPlugin:
             output: Annotated[
                 str | None, typer.Option(help="Produce stats to a brooklet topic.")
             ] = None,
+            stream_dir: Annotated[
+                Path | None,
+                typer.Option(
+                    "--stream-dir",
+                    envvar="BROOKLET_DIR",
+                    help="Stream directory for --output topic. Defaults to path.",
+                ),
+            ] = None,
         ) -> None:
             """Scan Claude Code session JSONL files and report analytics."""
             stats_iter = scan_sessions(
@@ -625,12 +633,19 @@ class ScoutPlugin:
             )
 
             if output:
-                stream = brooklet.open(path)
+                stream = brooklet.open(stream_dir or path)
                 original_iter = stats_iter
 
                 def producing_iter():
                     for stats in original_iter:
-                        stream.produce(output, stats.to_dict(), source="scout")
+                        try:
+                            stream.produce(output, stats.to_dict(), source="scout")
+                        except (OSError, ValueError, TypeError) as e:
+                            typer.echo(
+                                f"Warning: failed to produce session {stats.session_id} "
+                                f"to topic {output!r}: {e}",
+                                err=True,
+                            )
                         yield stats
 
                 stats_iter = producing_iter()
