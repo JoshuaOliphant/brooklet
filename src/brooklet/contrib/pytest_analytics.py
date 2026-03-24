@@ -338,7 +338,7 @@ class PytestPlugin:
             runs: list[RunStats] = []
             try:
                 parent_dir = str(Path(path).resolve().parent)
-                stream = brooklet.open(str(stream_dir) if stream_dir else parent_dir)
+                stream = brooklet.open(stream_dir or parent_dir)
 
                 stats_iter = scan_runs(path=path, mode=mode, follow=follow, stream=stream)
 
