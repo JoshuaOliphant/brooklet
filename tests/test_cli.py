@@ -206,6 +206,43 @@ def test_produce_then_consume_roundtrip(tmp_path):
         assert got["seq"] == orig["seq"]
 
 
+def test_version_flag(tmp_path):
+    result = runner.invoke(app, ["--version"])
+    assert result.exit_code == 0
+    assert "brooklet" in result.output
+    assert brooklet.__version__ in result.output
+
+
+def test_cat_outputs_all_events(tmp_path):
+    """cat dumps all events without advancing any offsets."""
+    stream = brooklet.open(tmp_path)
+    stream.produce("cat-topic", {"type": "a"})
+    stream.produce("cat-topic", {"type": "b"})
+
+    result = runner.invoke(app, ["cat", "cat-topic", "--stream-dir", str(tmp_path)])
+    assert result.exit_code == 0
+
+    lines = result.output.strip().split("\n")
+    assert len(lines) == 2
+    assert json.loads(lines[0])["type"] == "a"
+    assert json.loads(lines[1])["type"] == "b"
+
+
+def test_cat_does_not_advance_offsets(tmp_path):
+    """cat is read-only — running it twice yields the same events."""
+    stream = brooklet.open(tmp_path)
+    stream.produce("cat-topic", {"type": "x"})
+
+    result1 = runner.invoke(app, ["cat", "cat-topic", "--stream-dir", str(tmp_path)])
+    result2 = runner.invoke(app, ["cat", "cat-topic", "--stream-dir", str(tmp_path)])
+    assert result1.output == result2.output
+
+
+def test_cat_missing_topic(tmp_path):
+    result = runner.invoke(app, ["cat", "nonexistent", "--stream-dir", str(tmp_path)])
+    assert result.exit_code != 0
+
+
 def test_stream_dir_env_var(tmp_path, monkeypatch):
     monkeypatch.setenv("BROOKLET_DIR", str(tmp_path))
 

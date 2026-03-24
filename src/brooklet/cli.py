@@ -15,11 +15,28 @@ import brooklet
 from brooklet.plugins import get_plugin_manager
 from brooklet.types import Mode
 
+
+def _version_callback(value: bool) -> None:
+    if value:
+        typer.echo(f"brooklet {brooklet.__version__}")
+        raise typer.Exit()
+
+
 app = typer.Typer(
     name="brooklet",
     help="The SQLite of event streaming — consumer coordination on top of JSONL files.",
     no_args_is_help=True,
 )
+
+
+@app.callback(invoke_without_command=True)
+def _app_callback(
+    version: Annotated[
+        bool, typer.Option("--version", help="Show version and exit.", is_eager=True)
+    ] = False,
+) -> None:
+    """The SQLite of event streaming — consumer coordination on top of JSONL files."""
+    _version_callback(version)
 
 STREAM_DIR_OPTION = Annotated[
     Path,
@@ -111,6 +128,46 @@ def consume(
                 typer.echo(json.dumps(event))
     except KeyboardInterrupt:
         pass
+
+
+@app.command(rich_help_panel="Core Commands")
+def cat(
+    topic: Annotated[str, typer.Argument(help="Topic name to read.")],
+    stream_dir: STREAM_DIR_OPTION = Path("."),
+) -> None:
+    """Dump all events from a topic without advancing offsets (read-only)."""
+    stream = brooklet.open(stream_dir)
+    try:
+        source = stream._registry.get(topic)
+    except KeyError:
+        typer.echo(f"Error: topic {topic!r} is not registered", err=True)
+        raise typer.Exit(code=1) from None
+
+    import glob as glob_module
+
+    from brooklet.envelope import wrap
+
+    file_path = source["path"]
+    file_mode = source["mode"]
+
+    filepaths = (
+        sorted(glob_module.glob(file_path)) if file_mode == "glob" else [file_path]
+    )
+
+    seq = 0
+    for fp in filepaths:
+        try:
+            with open(fp) as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    seq += 1
+                    event = wrap(line, seq=seq, source=topic)
+                    if event is not None:
+                        typer.echo(json.dumps(event))
+        except OSError as e:
+            typer.echo(f"Warning: cannot read {fp}: {e}", err=True)
 
 
 def _load_plugins() -> None:
