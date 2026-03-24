@@ -338,7 +338,10 @@ class PytestPlugin:
             runs: list[RunStats] = []
             try:
                 parent_dir = str(Path(path).resolve().parent)
-                stream = brooklet.open(stream_dir or parent_dir)
+                # Only open a stream when needed — batch mode reads files directly
+                stream = None
+                if output or follow:
+                    stream = brooklet.open(stream_dir or parent_dir)
 
                 stats_iter = scan_runs(path=path, mode=mode, follow=follow, stream=stream)
 
