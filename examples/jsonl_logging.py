@@ -137,7 +137,7 @@ def consume_logs(stream_dir: Path, follow: bool = False) -> None:
     stream = brooklet.open(str(stream_dir))
 
     # Register the external JSONL file as a topic.
-    stream.register(TOPIC, path=str(log_path))
+    stream.register(TOPIC, path=str(log_path), mode="single-file")
 
     group = "log-viewer"
     mode = "follow" if follow else "batch"
