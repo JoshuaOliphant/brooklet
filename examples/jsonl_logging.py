@@ -15,18 +15,18 @@ This example shows three things:
 
 Setup::
 
-    pip install python-json-logger
+    uv add python-json-logger  # optional; a stdlib fallback is included
 
 Usage::
 
     # Terminal 1 — generate some log events
-    python examples/jsonl_logging.py produce /tmp/log-demo
+    uv run python examples/jsonl_logging.py produce /tmp/log-demo
 
     # Terminal 2 — tail the log stream with brooklet
-    python examples/jsonl_logging.py consume /tmp/log-demo
+    uv run python examples/jsonl_logging.py consume /tmp/log-demo
 
     # Or follow mode (tails forever, like ``tail -f``)
-    python examples/jsonl_logging.py follow /tmp/log-demo
+    uv run python examples/jsonl_logging.py follow /tmp/log-demo
 """
 
 import json
@@ -168,9 +168,9 @@ def consume_logs(stream_dir: Path, follow: bool = False) -> None:
 def main() -> int:
     usage = (
         "Usage:\n"
-        "  python examples/jsonl_logging.py produce <stream-dir>\n"
-        "  python examples/jsonl_logging.py consume <stream-dir>\n"
-        "  python examples/jsonl_logging.py follow  <stream-dir>\n"
+        "  uv run python examples/jsonl_logging.py produce <stream-dir>\n"
+        "  uv run python examples/jsonl_logging.py consume <stream-dir>\n"
+        "  uv run python examples/jsonl_logging.py follow  <stream-dir>\n"
     )
 
     if len(sys.argv) < 3:
