@@ -1,6 +1,7 @@
 # ABOUTME: Event consumer with batch and follow modes
 # ABOUTME: Reads JSONL lines from registered sources with offset tracking
 
+import contextlib
 import fnmatch
 import glob as glob_module
 import logging
@@ -273,6 +274,17 @@ class Consumer:
                 try:
                     action, filepath = event_queue.get(timeout=0.5)
                 except queue.Empty:
+                    # Poll all known files even without a watchdog event —
+                    # macOS FSEvents coalesces rapid writes.
+                    for filepath in list(self._file_positions):
+                        known_pos = self._file_positions.get(filepath, 0)
+                        try:
+                            with open(filepath) as f:
+                                f.seek(known_pos)
+                                yield from self._read_lines(f)
+                                self._file_positions[filepath] = f.tell()
+                        except OSError:
+                            pass
                     continue
 
                 # Drain the queue to batch process notifications
@@ -337,12 +349,12 @@ class Consumer:
             # First, read any existing lines
             yield from self._read_lines(f)
 
-            # Then tail for new lines
+            # Then tail for new lines — poll on every iteration because
+            # macOS FSEvents coalesces rapid writes, so relying solely on
+            # watchdog events would miss intermediate lines.
             while not self._closed:
-                try:
+                with contextlib.suppress(queue.Empty):
                     event_queue.get(timeout=0.5)
-                except queue.Empty:
-                    continue
 
                 # Drain the queue (multiple notifications may have arrived)
                 while not event_queue.empty():

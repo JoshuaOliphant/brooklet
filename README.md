@@ -176,6 +176,20 @@ python examples/ci_health_check.py reports/
 
 The health check consumes the `pytest/summaries` topic and fails if any run has failures or tests exceeding a duration threshold. This pipeline runs in brooklet's own CI — see [`.github/workflows/test.yml`](.github/workflows/test.yml).
 
+### Example: JSONL logging as an event stream
+
+Any Python app using structured JSON logging (via `python-json-logger`, `structlog`, or a custom formatter) produces JSONL that brooklet can consume directly — no adapter needed. See [`examples/jsonl_logging.py`](examples/jsonl_logging.py) for a complete example:
+
+```bash
+# Terminal 1 — generate log events (writes app.jsonl every second)
+uv run python examples/jsonl_logging.py produce /tmp/log-demo
+
+# Terminal 2 — tail the log stream in follow mode
+uv run python examples/jsonl_logging.py follow /tmp/log-demo
+```
+
+The example registers the log file as an `app/logs` topic and consumes it with offset tracking. It works with or without `python-json-logger` installed (falls back to a stdlib-only formatter).
+
 ## Try It
 
 ### Pipe anything through brooklet
