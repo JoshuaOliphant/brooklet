@@ -19,7 +19,7 @@ Brooklet gives agents three things they need:
 
 ## 1. CI/CD Failure Triage Agent
 
-**Status:** Exploring — see `2026-03-29-ci-triage-agent-design.md`
+**Status:** Evolved into multi-agent coordination design — see `2026-03-29-agent-coordination-design.md`
 
 An agent consumes pytest-reportlog JSONL (already supported via `brooklet pytest scan`). When tests fail, the agent:
 - Consumes failure events (test name, traceback, duration)
