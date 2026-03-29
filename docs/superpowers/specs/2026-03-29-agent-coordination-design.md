@@ -244,7 +244,192 @@ This is the LLM-powered stage. It calls Claude with the test + source context.
 | Schema validation | Freeform JSON | Optional schema registry (future) |
 | Timeout/SLA | No deadline tracking | Watchdog agent on event timestamps |
 
+## Integration with Claude Code Hooks
+
+The most natural entry point isn't a separate agent system — it's wiring
+brooklet into the Claude Code session lifecycle via hooks. This makes every
+session event-aware without changing how you work.
+
+### Relevant Hook Events
+
+| Hook Event | When it fires | Brooklet integration |
+|------------|--------------|---------------------|
+| `SessionStart` | Session begins (startup, resume, clear, compact) | Consume pending events, inject as context |
+| `Stop` | Claude finishes responding | Produce session summary, check for pending work |
+| `PostToolUse` | After any tool runs | Produce structured events for specific tools (Bash/pytest) |
+| `SubagentStop` | Background agent finishes | Produce agent results to topic |
+| `PreToolUse` | Before tool execution | Could inject context from topics ("last time this test failed because...") |
+
+### Hook Data Available
+
+Every hook receives via stdin JSON:
+- `session_id` — correlate events across a session
+- `transcript_path` — full conversation JSONL
+- `cwd` — working directory (= stream directory)
+- `hook_event_name` — which event fired
+
+Tool hooks additionally get:
+- `tool_name` — which tool ran (e.g. "Bash")
+- `tool_input` — what was passed (e.g. the command)
+- `tool_response` — what came back (for PostToolUse)
+
+### Hook → Brooklet Data Flow
+
+**SessionStart hook (command type):**
+```bash
+#!/bin/bash
+# .claude/hooks/session-start.sh
+# Drain pending events and inject as context for the session
+
+INPUT=$(cat)  # JSON from stdin
+CWD=$(echo "$INPUT" | jq -r '.cwd')
+
+# Consume pending events from known topics
+PENDING=$(cd "$CWD" && brooklet consume sessions/pending --group claude-session 2>/dev/null)
+
+if [ -n "$PENDING" ]; then
+  # stdout text gets added as context to Claude
+  echo "Pending items from previous sessions and CI:"
+  echo "$PENDING"
+fi
+```
+
+**Stop hook (command type):**
+```bash
+#!/bin/bash
+# .claude/hooks/session-stop.sh
+# Produce a session summary event
+
+INPUT=$(cat)
+SESSION_ID=$(echo "$INPUT" | jq -r '.session_id')
+CWD=$(echo "$INPUT" | jq -r '.cwd')
+LAST_MSG=$(echo "$INPUT" | jq -r '.last_assistant_message // empty')
+
+# Produce session end event
+cd "$CWD" && echo "{\"session_id\": \"$SESSION_ID\", \"summary\": \"session ended\"}" | \
+  brooklet produce sessions/completed --source "claude-session"
+```
+
+**PostToolUse hook (matched to Bash, command type):**
+```bash
+#!/bin/bash
+# .claude/hooks/post-test-run.sh
+# Capture test results when pytest runs
+
+INPUT=$(cat)
+TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name')
+TOOL_INPUT=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
+TOOL_RESPONSE=$(echo "$INPUT" | jq -r '.tool_response // empty')
+
+# Only act on pytest commands
+if [[ "$TOOL_INPUT" == *"pytest"* ]]; then
+  CWD=$(echo "$INPUT" | jq -r '.cwd')
+  SESSION_ID=$(echo "$INPUT" | jq -r '.session_id')
+
+  # If tests failed, produce a failure event
+  if echo "$TOOL_RESPONSE" | grep -q "FAILED"; then
+    cd "$CWD" && echo "{
+      \"session_id\": \"$SESSION_ID\",
+      \"command\": \"$TOOL_INPUT\",
+      \"status\": \"failed\",
+      \"output_snippet\": $(echo "$TOOL_RESPONSE" | tail -20 | jq -Rs .)
+    }" | brooklet produce testfix/detected --source "claude-session"
+  fi
+fi
+```
+
+### How the Main Session Knows
+
+The key question: if a background agent fixes something, how does the active
+session find out?
+
+**Option A: Stop hook checks for resolved events**
+
+The `Stop` hook fires every time Claude finishes a response. It can check
+whether background work completed and inject context:
+
+```bash
+# In stop hook: check if background agents resolved anything
+RESOLVED=$(brooklet consume testfix/verified --group claude-session 2>/dev/null)
+if [ -n "$RESOLVED" ]; then
+  # Return JSON that tells Claude to continue
+  echo '{"decision": "block", "reason": "Background agent fixed a test: '"$RESOLVED"'. Verify the changes."}'
+fi
+```
+
+This uses the Stop hook's blocking capability — returning `"decision": "block"`
+tells Claude "don't stop, there's more to do" with the reason as context.
+
+**Option B: FileChanged hook on topic data files**
+
+```json
+{
+  "hooks": {
+    "FileChanged": [
+      {
+        "matcher": "data.jsonl",
+        "hooks": [{
+          "type": "command",
+          "command": ".claude/hooks/topic-changed.sh"
+        }]
+      }
+    ]
+  }
+}
+```
+
+When a background agent produces to a topic (writes to `data.jsonl`), the
+FileChanged hook fires and injects context into the active session.
+
+**Option C: PreToolUse enrichment**
+
+Before Claude runs a tool, inject relevant context from topics:
+
+```bash
+# pre-tool-use hook matched to "Bash"
+# If Claude is about to run tests, inject known failure context
+if [[ "$TOOL_INPUT" == *"pytest"* ]]; then
+  KNOWN=$(brooklet cat testfix/analyzed 2>/dev/null | tail -1)
+  if [ -n "$KNOWN" ]; then
+    echo "Known issue from previous analysis: $KNOWN"
+  fi
+fi
+```
+
+### Session Lifecycle with Brooklet
+
+```
+SessionStart hook
+  └─ brooklet consume sessions/pending → inject context
+  └─ brooklet consume testfix/verified → "these were auto-fixed"
+
+  ... normal Claude session ...
+
+  PostToolUse(Bash/pytest)
+    └─ if tests failed → brooklet produce testfix/detected
+    └─ Claude fixes them in-session (normal flow)
+
+  PostToolUse(Bash/git push)
+    └─ brooklet produce sessions/pushed → track what was pushed
+
+Stop hook
+  └─ brooklet produce sessions/completed → session summary
+  └─ check testfix/verified → block if background fix landed
+  └─ check sessions/pending → warn if unfinished work
+```
+
 ## Implementation Plan
+
+### Phase 0: Session memory (hooks integration)
+
+Wire brooklet into the Claude Code session lifecycle:
+- SessionStart hook: consume pending events, inject as context
+- Stop hook: produce session summary, check for resolved background work
+- PostToolUse hook: capture test failures as structured events
+- Settings in `.claude/settings.json` (project-level, shareable)
+
+This is immediately useful with zero autonomous agents — it gives sessions
+memory across restarts and captures structured events from tool usage.
 
 ### Phase 1: Agent harness
 
@@ -257,7 +442,7 @@ A thin `brooklet.agent` module that codifies the agent contract:
 ### Phase 2: Test-fix pipeline
 
 Build the 5-stage pipeline above using the harness:
-- Detector (wraps existing pytest adapter)
+- Detector (wraps existing pytest adapter, or hooks-based)
 - Analyzer (LLM-powered)
 - Planner (LLM-powered)
 - Executor (applies edits, runs tests)
