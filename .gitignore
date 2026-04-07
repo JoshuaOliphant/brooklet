@@ -21,3 +21,7 @@ test-results.jsonl
 reports/
 .brooklet/sources.json
 .brooklet/offsets/
+
+# Claude Code local settings (not shared)
+.claude/settings.local.json
+CLAUDE.local.md

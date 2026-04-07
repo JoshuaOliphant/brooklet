@@ -26,7 +26,7 @@ Brooklet is a **consumer coordination layer**, not a message broker. External to
 - watchdog for filesystem watching in follow mode (DEC-008)
 - Python 3.12+ minimum (DEC-009)
 - Path-style topic names (`scout/stats`) create nested directories
-- Full design docs at `second_brain/projects/_active/brooklet/`
+- Full decision records at `docs/decisions/`
 
 ### Data Layout
 ```
@@ -68,6 +68,16 @@ rm -rf directory            # NOT: rm -r directory
 ```
 
 Other commands: `apt-get -y`, `HOMEBREW_NO_AUTO_UPDATE=1 brew`, `scp -o BatchMode=yes`.
+
+## Harness Engineering
+
+This project uses Claude Code harness engineering — see `docs/harness-engineering.md` for the full design.
+
+- **Hooks** enforce quality gates automatically (lint on edit, tests on stop)
+- **Skills** provide reusable workflows: `/tdd`, `/review`, `/spec`
+- **Rules** in `.claude/rules/` load context only when touching relevant files
+- **Convention tests** in `tests/test_conventions.py` enforce ABOUTME mechanically
+- **Decision records** live in `docs/decisions/` (DEC-NNN format)
 
 ## Session Completion
 
