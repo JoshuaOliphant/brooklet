@@ -12,6 +12,9 @@ Brooklet is a **consumer coordination layer**, not a message broker. External to
 - `registry.py` — Maps topic names to sources; supports external (registered) and local (produced)
 - `consumer.py` — Batch and follow-mode iterators over JSONL files
 - `stream.py` — Orchestrator: `register()`, `produce()`, `consume()`, `topics()`
+- `cli.py` — Unified CLI entry point; Typer app with core commands and plugin loading
+- `types.py` — Shared type definitions (Mode, Event, offset dataclasses, SourceDef)
+- `plugins.py` — Plugin system using pluggy for CLI extensibility
 - `__init__.py` — Public API: `brooklet.open(path)`
 
 ### Contrib Adapters (3-layer pattern: parsing → consumer integration → CLI)
@@ -74,7 +77,6 @@ Other commands: `apt-get -y`, `HOMEBREW_NO_AUTO_UPDATE=1 brew`, `scp -o BatchMod
 This project uses Claude Code harness engineering — see `docs/harness-engineering.md` for the full design.
 
 - **Hooks** enforce quality gates automatically (lint on edit, tests on stop)
-- **Skills** provide reusable workflows: `/tdd`, `/review`, `/spec`
 - **Rules** in `.claude/rules/` load context only when touching relevant files
 - **Convention tests** in `tests/test_conventions.py` enforce ABOUTME mechanically
 - **Decision records** live in `docs/decisions/` (DEC-NNN format)

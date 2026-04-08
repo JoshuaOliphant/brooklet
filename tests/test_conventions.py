@@ -7,7 +7,7 @@ from pathlib import Path
 def test_all_src_py_files_have_aboutme():
     """Every .py file in src/brooklet/ must start with a 2-line ABOUTME comment."""
     src_dir = Path("src/brooklet")
-    py_files = list(src_dir.rglob("*.py"))
+    py_files = [p for p in src_dir.rglob("*.py") if p.name != "__init__.py"]
     assert py_files, "No .py files found in src/brooklet/"
 
     for path in py_files:
@@ -29,8 +29,7 @@ def test_all_test_py_files_have_aboutme():
 
     for path in py_files:
         lines = path.read_text().splitlines()
-        if not lines:
-            continue
+        assert lines, f"{path}: file is empty, must have ABOUTME header"
         assert lines[0].startswith("# ABOUTME:"), (
             f"{path}: line 1 must start with '# ABOUTME:'"
         )

@@ -14,4 +14,4 @@ See existing adapters for reference:
 - `contrib/claude_analytics.py` — Claude Code session analytics (`brooklet scout scan`)
 - `contrib/pytest_analytics.py` — pytest-reportlog analytics (`brooklet pytest scan`)
 
-Check `docs/superpowers/specs/` for design specs before starting new adapters.
+Use `/autonomous-sdlc:bdd-spec` to write acceptance criteria before starting new adapters.

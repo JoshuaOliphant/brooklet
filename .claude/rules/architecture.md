@@ -18,9 +18,12 @@ See `docs/decisions/` for full rationale on each decision.
 
 ## Module Responsibilities
 
-- `envelope.py` — `wrap()` on read, `serialize()` on write. Never clobber existing fields.
+- `envelope.py` — `wrap()` on read, `serialize()` on write. Preserves existing `_ts` and `_src`; always sets `_seq`.
 - `offsets.py` — Byte offset persistence. One file per consumer group per topic.
 - `registry.py` — Maps topic names to file paths. Two kinds: external (registered) and local (produced).
 - `consumer.py` — Batch and follow-mode iterators. Uses watchdog for tailing.
 - `stream.py` — Orchestrator. The only module that coordinates the others.
+- `cli.py` — Unified CLI entry point. Typer app with core commands and plugin loading.
+- `types.py` — Shared type definitions (Mode, Event, offset dataclasses, SourceDef).
+- `plugins.py` — Plugin system using pluggy for CLI extensibility.
 - `__init__.py` — Public API surface. Exports `brooklet.open(path)`.

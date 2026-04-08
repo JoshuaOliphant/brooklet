@@ -8,7 +8,7 @@ Events flowing through brooklet need minimal metadata for coordination (timestam
 
 ## Decision
 
-Auto-inject `_ts`, `_seq`, `_src` fields on both read (`wrap()`) and write (`serialize()`). Never clobber existing values — if a field is already present, preserve it.
+Auto-inject `_ts`, `_seq`, `_src` fields on both read (`wrap()`) and write (`serialize()`). Preserve existing `_ts` and `_src` via `setdefault()`. `_seq` is always set by brooklet as the canonical sequence number.
 
 ## Consequences
 
