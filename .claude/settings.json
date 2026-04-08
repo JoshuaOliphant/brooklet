@@ -26,7 +26,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "cd \"$CLAUDE_PROJECT_DIR\" && uv sync --locked --quiet 2>&1 && echo '--- Baseline Test Run ---' && uv run pytest -x -q --tb=line 2>&1 | tail -8",
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" && uv sync --locked --quiet 2>&1 && echo '--- Baseline Test Run ---' && bash -c 'set -o pipefail; uv run pytest -x -q --tb=line 2>&1 | tail -8'",
             "timeout": 120,
             "statusMessage": "Syncing deps and verifying baseline..."
           }
@@ -61,7 +61,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "cd \"$CLAUDE_PROJECT_DIR\" && echo '=== Quality Gate ===' && uv run ruff check . 2>&1 && uv run pytest -x -q --tb=short 2>&1 | tail -15"
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" && echo '=== Quality Gate ===' && uv run ruff check . 2>&1 && bash -c 'set -o pipefail; uv run pytest -x -q --tb=short 2>&1 | tail -15'"
           }
         ]
       }

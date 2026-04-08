@@ -104,7 +104,7 @@ advisory like CLAUDE.md, but deterministic checks that block or inject context.
       "matcher": "",
       "hooks": [{
         "type": "command",
-        "command": "cd \"$CLAUDE_PROJECT_DIR\" && <your-deps-sync> && <your-test-command> | tail -8",
+        "command": "cd \"$CLAUDE_PROJECT_DIR\" && <your-deps-sync> && bash -c 'set -o pipefail; <your-test-command> | tail -8'",
         "timeout": 120,
         "statusMessage": "Verifying baseline..."
       }]
@@ -140,7 +140,7 @@ Claude sees lint errors immediately after each edit and self-corrects.
     "matcher": "",
     "hooks": [{
       "type": "command",
-      "command": "cd \"$CLAUDE_PROJECT_DIR\" && echo '=== Quality Gate ===' && <your-linter> && <your-test-command> | tail -15"
+      "command": "cd \"$CLAUDE_PROJECT_DIR\" && echo '=== Quality Gate ===' && <your-linter> && bash -c 'set -o pipefail; <your-test-command> | tail -15'"
     }]
   }]
 }
