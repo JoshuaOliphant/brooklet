@@ -74,7 +74,7 @@ Other commands: `apt-get -y`, `HOMEBREW_NO_AUTO_UPDATE=1 brew`, `scp -o BatchMod
 
 ## Harness Engineering
 
-This project uses Claude Code harness engineering — see `docs/harness-engineering.md` for the full design.
+This project uses Claude Code harness engineering.
 
 - **Hooks** enforce quality gates automatically (lint on edit, tests on stop)
 - **Rules** in `.claude/rules/` load context only when touching relevant files
