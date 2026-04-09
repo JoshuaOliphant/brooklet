@@ -19,6 +19,7 @@ logs/
 # Generated data files
 test-results.jsonl
 reports/
+*.jsonl.bak
 .brooklet/sources.json
 .brooklet/offsets/
 

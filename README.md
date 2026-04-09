@@ -100,6 +100,7 @@ Brooklet ships a unified CLI with core commands and plugin subcommands:
 # Core commands — pipe-friendly Unix citizens
 echo '{"type":"hello"}' | brooklet produce my-topic --stream-dir ./streams
 brooklet consume my-topic --group reader --stream-dir ./streams | jq '.'
+brooklet cat my-topic --stream-dir ./streams             # read-only, no offset tracking
 brooklet register sessions "~/.claude/projects/*/*.jsonl" --mode glob --stream-dir ./streams
 brooklet topics --stream-dir ./streams --json
 ```
@@ -238,11 +239,15 @@ brooklet consume git/log --group other --stream-dir ./demo | wc -l   # → 20
 | `stream.produce(topic, event, source)` | Write events to a local topic |
 | `stream.topics()` | List all registered topics |
 
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for release history. Generated with [git-cliff](https://git-cliff.org/).
+
 ## Development
 
 ```bash
-uv run pytest -v          # Run all tests (226 tests)
-uv run pytest tests/bdd/  # BDD acceptance tests (35 scenarios)
+uv run pytest -v          # Run all tests
+uv run pytest tests/bdd/  # BDD acceptance tests
 uv run ruff check .       # Lint
 ```
 
