@@ -65,6 +65,49 @@ def test_watch_impl_empty_iterator_writes_nothing():
     assert buf.getvalue() == ""
 
 
+def test_watch_impl_isolates_per_event_format_errors(capsys):
+    """A bad event must not kill the stream — emit a fallback line and continue.
+
+    For a long-running Monitor watcher, one event with a broken value (e.g. a
+    non-dict payload slipping through, or a field whose ``__repr__`` raises)
+    should never take down the entire tail. The bad event gets a fallback
+    error line, and the surrounding good events still render normally.
+    """
+
+    class BoomRepr:
+        def __repr__(self) -> str:
+            raise RuntimeError("boom")
+
+    good_a = {"_seq": 1, "_ts": "2026-04-10T14:03:22Z", "type": "a"}
+    # A non-dict slipping in would cause format_event to AttributeError on
+    # `.items()` — exactly the kind of drift we want to survive.
+    bad = "this is not an event dict"
+    good_b = {"_seq": 3, "_ts": "2026-04-10T14:03:24Z", "type": "c"}
+    # Also exercise the broken-__repr__ path via a dict with a poisoned value.
+    bad_repr = {"_seq": 2, "_ts": "2026-04-10T14:03:23Z", "payload": BoomRepr()}
+
+    buf = io.StringIO()
+    _watch_impl(iter([good_a, bad, bad_repr, good_b]), buf)
+
+    lines = buf.getvalue().splitlines()
+    assert len(lines) == 4, f"expected 4 output lines (none silently skipped), got {lines}"
+
+    # Good events render normally.
+    assert lines[0] == "#1 14:03:22 type=a"
+    assert lines[3] == "#3 14:03:24 type=c"
+
+    # Bad events produce a fallback error line that still fits the
+    # one-line-per-event Monitor contract.
+    assert "format error" in lines[1]
+    assert "format error" in lines[2]
+    assert "\n" not in lines[1]
+    assert "\n" not in lines[2]
+
+    # The full error goes to stderr so the user can diagnose.
+    err = capsys.readouterr().err
+    assert "format error" in err or "AttributeError" in err or "RuntimeError" in err
+
+
 # ---------------------------------------------------------------------------
 # CliRunner tests
 # ---------------------------------------------------------------------------
@@ -218,4 +261,10 @@ def test_watch_saves_offset_on_sigterm(tmp_path):
         f"offset file not saved on SIGTERM at {offset_file} — resumability is broken"
     )
     data = json.loads(offset_file.read_text())
-    assert data["offset"] > 0, f"expected non-zero offset past consumed events, got {data}"
+    # Require full catch-up, not just "something saved". A partial offset
+    # would pass `> 0` but still break resumability on restart.
+    file_size = (tmp_path / "sigterm" / "data.jsonl").stat().st_size
+    assert data["offset"] == file_size, (
+        f"expected offset to equal file size after full catch-up, "
+        f"got offset={data['offset']}, file_size={file_size}"
+    )

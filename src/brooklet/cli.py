@@ -138,9 +138,27 @@ def _watch_impl(events: Iterable[Event], out: TextIO) -> None:
     """Write one compact line per event to ``out``, flushing after each.
 
     Decoupled from Stream/Consumer so tests can inject a plain iterable.
+
+    Per-event failures (e.g. a non-dict payload, a field whose ``__repr__``
+    raises) are isolated: the offending event gets a fallback line matching
+    the one-line-per-event Monitor contract, the full traceback is echoed to
+    stderr for diagnosis, and iteration continues. One malformed event must
+    never take down a long-running watcher.
     """
     for event in events:
-        out.write(format_event(event) + "\n")
+        try:
+            line = format_event(event)
+        except Exception as exc:
+            msg = str(exc)
+            if len(msg) > 80:
+                msg = msg[:80]
+            line = f"#? ??:??:?? <format error: {type(exc).__name__}: {msg}>"
+            print(
+                f"brooklet watch: format error: {type(exc).__name__}: {exc}",
+                file=sys.stderr,
+                flush=True,
+            )
+        out.write(line + "\n")
         out.flush()
 
 
@@ -165,30 +183,42 @@ def watch(
     stdout line into a chat notification. Output is line-buffered so events
     reach the reader immediately.
     """
-    # Monitor captures stdout via a pipe; Python defaults to block buffering
-    # on pipes, which would hide events until the buffer fills. This call is
-    # essential, not cosmetic.
-    sys.stdout.reconfigure(line_buffering=True)
 
-    # Convert SIGTERM to KeyboardInterrupt so the Consumer context manager
-    # unwinds and saves its offset. Monitor's TaskStop sends SIGTERM, which
-    # otherwise exits Python without running __exit__, leaving offsets
-    # unsaved and breaking the resume-across-restarts guarantee.
+    # Install the SIGTERM-to-KeyboardInterrupt handler BEFORE any other work.
+    # Monitor's TaskStop sends SIGTERM, and Python's default SIGTERM action
+    # is to exit immediately without unwinding — skipping Consumer.__exit__
+    # and leaving offsets unsaved. If the signal arrives during setup
+    # (reconfigure, brooklet.open, stream.consume) before the handler is
+    # registered, resume-across-restarts silently breaks. Register first so
+    # every subsequent line is covered.
+    #
+    # Note: there is still an untestable micro-race between process start
+    # and this line, but it is bounded to a few Python bytecodes. The
+    # integration assertion in test_watch_saves_offset_on_sigterm pins
+    # post-setup behavior (full offset catch-up on SIGTERM).
     def _sigterm_to_interrupt(signum: int, frame: object) -> None:
         raise KeyboardInterrupt
 
     signal.signal(signal.SIGTERM, _sigterm_to_interrupt)
 
-    stream = brooklet.open(stream_dir)
     try:
-        consumer_ctx = stream.consume(topic, group=group, follow=True)
-    except KeyError:
-        typer.echo(f"Error: topic {topic!r} is not registered", err=True)
-        raise typer.Exit(code=1) from None
-    try:
+        # Monitor captures stdout via a pipe; Python defaults to block
+        # buffering on pipes, which would hide events until the buffer fills.
+        # This call is essential, not cosmetic.
+        sys.stdout.reconfigure(line_buffering=True)
+
+        stream = brooklet.open(stream_dir)
+        try:
+            consumer_ctx = stream.consume(topic, group=group, follow=True)
+        except KeyError:
+            typer.echo(f"Error: topic {topic!r} is not registered", err=True)
+            raise typer.Exit(code=1) from None
+
         with consumer_ctx as consumer:
             _watch_impl(consumer, sys.stdout)
     except KeyboardInterrupt:
+        # SIGTERM/Ctrl-C during setup or runtime — the `with` block above
+        # (if entered) already ran Consumer.__exit__ and saved offsets.
         pass
 
 
