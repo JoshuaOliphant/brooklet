@@ -100,7 +100,8 @@ Brooklet ships a unified CLI with core commands and plugin subcommands:
 # Core commands — pipe-friendly Unix citizens
 echo '{"type":"hello"}' | brooklet produce my-topic --stream-dir ./streams
 brooklet consume my-topic --group reader --stream-dir ./streams | jq '.'
-brooklet cat my-topic --stream-dir ./streams             # read-only, no offset tracking
+brooklet watch my-topic --group watcher --stream-dir ./streams    # compact line-per-event tailing for Claude Code Monitor
+brooklet cat my-topic --stream-dir ./streams                      # read-only, no offset tracking
 brooklet register sessions "~/.claude/projects/*/*.jsonl" --mode glob --stream-dir ./streams
 brooklet topics --stream-dir ./streams --json
 ```
@@ -112,6 +113,61 @@ export BROOKLET_DIR=./streams
 echo '{"event":"test"}' | brooklet produce events
 brooklet consume events --group reader
 ```
+
+### Watch: compact tailing for Claude Code Monitor
+
+The `watch` command tails a topic and emits one short human-readable line per event, designed for [Claude Code's Monitor tool](https://code.claude.com/docs/en/tools) which turns each stdout line into a chat notification:
+
+```bash
+brooklet watch my-topic --group watch-session --stream-dir ./streams
+# #1 14:03:22 type=hello n=1
+# #2 14:03:23 type=world n=2 tags=[...2 items]
+# #3 14:03:24 type=result passed=True duration_s=0.42
+```
+
+Unlike `consume --follow`, which emits raw JSON envelopes, `watch` writes compact `#seq HH:MM:SS key=val` lines, scrubs control characters (a stray `\n` would split one event into two Monitor notifications), and reconfigures stdout to line-buffered mode so events reach the reader immediately through Monitor's pipe. It always follows — use `consume --follow` if you need raw JSON for a machine consumer.
+
+#### When `watch` earns its complexity
+
+For a single pytest run in one shell, a plain `pytest --tb=line | grep PASS` under Monitor is simpler and you should reach for that first. `watch` only pays its keep when one of these matters:
+
+1. **Gapless resume across restarts.** `tail -f` offers "start from current end" (miss the gap) or "start from beginning" (full replay). Brooklet tracks a byte offset per consumer group, so when Monitor's `TaskStop` kills the process or your session restarts later, `watch` picks up exactly where it left off — no replay, no missed events. This is the killer feature that nothing else in the JSONL-tail design space offers.
+
+2. **Cross-session event bus.** One Claude Code session `produce`s events, another session `watch`es them. Because each consumer group has its own offset, the watcher doesn't need the producer to cooperate, and reconnecting never misses anything. No broker, no server — just appended JSONL files.
+
+3. **Aggregated streams, not raw log lines.** The `scout` and `pytest` adapters transform raw session/reportlog JSONL into derived `SessionStats` / `RunStats` events. `brooklet watch scout/session-stats` shows the aggregation, not the firehose, which keeps Monitor's one-event-per-notification contract useful.
+
+4. **Multi-source fan-in with per-source attribution.** Register several JSONL files as separate topics and the `_src` envelope field tells you which source each event came from when you consume across them. `tail -f file1 file2 file3` interleaves lines with no attribution and no per-file offsets.
+
+#### Try it: gapless resume in 10 seconds
+
+The most compelling of the four, and the easiest to demonstrate. A single shell, no Monitor required — this shows the property that makes brooklet + Monitor a legitimate pairing:
+
+```bash
+mkdir /tmp/brooklet-resume && cd /tmp/brooklet-resume
+
+# Seed two events
+echo '{"n":1,"msg":"first"}'  | brooklet produce demo
+echo '{"n":2,"msg":"second"}' | brooklet produce demo
+
+# Consume them, then stop
+brooklet watch demo --group resumer &
+WPID=$! ; sleep 1 ; kill $WPID ; wait
+# #1 HH:MM:SS n=1 msg=first
+# #2 HH:MM:SS n=2 msg=second
+
+# Produce two more WHILE no watcher is running
+echo '{"n":3,"msg":"during gap"}' | brooklet produce demo
+echo '{"n":4,"msg":"still gap"}'  | brooklet produce demo
+
+# Restart — resumes from the saved offset, only shows the new events
+brooklet watch demo --group resumer &
+WPID=$! ; sleep 1 ; kill $WPID ; wait
+# #1 HH:MM:SS n=3 msg=during gap
+# #2 HH:MM:SS n=4 msg=still gap
+```
+
+Same group name, different process, zero replay. The second run's `#N` prefix is a per-run counter that restarts at 1, but the `n=3` / `n=4` values in the payload show that brooklet skipped events 1–2 and delivered only what was written during the gap. `tail -f` cannot do this.
 
 ### Plugin system
 
