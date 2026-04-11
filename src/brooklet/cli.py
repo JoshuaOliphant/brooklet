@@ -5,15 +5,17 @@ from __future__ import annotations
 
 import json
 import sys
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, TextIO
 
 import pluggy
 import typer
 
 import brooklet
 from brooklet.plugins import get_plugin_manager
-from brooklet.types import Mode
+from brooklet.types import Event, Mode
+from brooklet.watch_format import format_event
 
 
 def _version_callback(value: bool) -> None:
@@ -37,6 +39,7 @@ def _app_callback(
 ) -> None:
     """The SQLite of event streaming — consumer coordination on top of JSONL files."""
     _version_callback(version)
+
 
 STREAM_DIR_OPTION = Annotated[
     Path,
@@ -130,6 +133,55 @@ def consume(
         pass
 
 
+def _watch_impl(events: Iterable[Event], out: TextIO) -> None:
+    """Write one compact line per event to ``out``, flushing after each.
+
+    Decoupled from Stream/Consumer so tests can inject a plain iterable.
+    """
+    for event in events:
+        out.write(format_event(event) + "\n")
+        out.flush()
+
+
+@app.command(rich_help_panel="Core Commands")
+def watch(
+    topic: Annotated[str, typer.Argument(help="Topic name to tail.")],
+    group: Annotated[
+        str,
+        typer.Option(
+            help=(
+                "Consumer group name for offset tracking. "
+                "Default 'watch' enables resume across restarts — "
+                "use a distinct group if running multiple concurrent watchers."
+            ),
+        ),
+    ] = "watch",
+    stream_dir: STREAM_DIR_OPTION = Path("."),
+) -> None:
+    """Tail a topic, emitting one compact line per event.
+
+    Always follows — designed for Claude Code's Monitor tool, which turns each
+    stdout line into a chat notification. Output is line-buffered so events
+    reach the reader immediately.
+    """
+    # Monitor captures stdout via a pipe; Python defaults to block buffering
+    # on pipes, which would hide events until the buffer fills. This call is
+    # essential, not cosmetic.
+    sys.stdout.reconfigure(line_buffering=True)
+
+    stream = brooklet.open(stream_dir)
+    try:
+        consumer_ctx = stream.consume(topic, group=group, follow=True)
+    except KeyError:
+        typer.echo(f"Error: topic {topic!r} is not registered", err=True)
+        raise typer.Exit(code=1) from None
+    try:
+        with consumer_ctx as consumer:
+            _watch_impl(consumer, sys.stdout)
+    except KeyboardInterrupt:
+        pass
+
+
 @app.command(rich_help_panel="Core Commands")
 def cat(
     topic: Annotated[str, typer.Argument(help="Topic name to read.")],
@@ -150,9 +202,7 @@ def cat(
     file_path = source["path"]
     file_mode = source["mode"]
 
-    filepaths = (
-        sorted(glob_module.glob(file_path)) if file_mode == "glob" else [file_path]
-    )
+    filepaths = sorted(glob_module.glob(file_path)) if file_mode == "glob" else [file_path]
 
     seq = 0
     for fp in filepaths:

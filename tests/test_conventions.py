@@ -13,12 +13,8 @@ def test_all_src_py_files_have_aboutme():
     for path in py_files:
         lines = path.read_text().splitlines()
         assert len(lines) >= 2, f"{path}: file too short for ABOUTME"
-        assert lines[0].startswith("# ABOUTME:"), (
-            f"{path}: line 1 must start with '# ABOUTME:'"
-        )
-        assert lines[1].startswith("# ABOUTME:"), (
-            f"{path}: line 2 must start with '# ABOUTME:'"
-        )
+        assert lines[0].startswith("# ABOUTME:"), f"{path}: line 1 must start with '# ABOUTME:'"
+        assert lines[1].startswith("# ABOUTME:"), f"{path}: line 2 must start with '# ABOUTME:'"
 
 
 def test_all_test_py_files_have_aboutme():
@@ -30,9 +26,7 @@ def test_all_test_py_files_have_aboutme():
     for path in py_files:
         lines = path.read_text().splitlines()
         assert lines, f"{path}: file is empty, must have ABOUTME header"
-        assert lines[0].startswith("# ABOUTME:"), (
-            f"{path}: line 1 must start with '# ABOUTME:'"
-        )
+        assert lines[0].startswith("# ABOUTME:"), f"{path}: line 1 must start with '# ABOUTME:'"
         assert len(lines) >= 2 and lines[1].startswith("# ABOUTME:"), (
             f"{path}: line 2 must start with '# ABOUTME:'"
         )

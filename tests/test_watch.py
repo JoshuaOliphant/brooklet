@@ -1,0 +1,166 @@
+# ABOUTME: Tests for the `brooklet watch` CLI command — compact tailing for Monitor
+# ABOUTME: Covers _watch_impl unit tests plus a subprocess smoke test for real buffering
+
+import io
+import queue
+import shutil
+import subprocess
+import sys
+import threading
+from pathlib import Path
+
+import pytest
+from typer.testing import CliRunner
+
+import brooklet
+from brooklet.cli import _watch_impl, app
+
+runner = CliRunner()
+
+
+# ---------------------------------------------------------------------------
+# _watch_impl unit tests — decoupled from real Consumer/follow-mode
+# ---------------------------------------------------------------------------
+
+
+def test_watch_impl_formats_events():
+    """_watch_impl writes one compact line per event to the given output."""
+    events = [
+        {"_seq": 1, "_ts": "2026-04-10T14:03:22Z", "type": "a", "n": 1},
+        {"_seq": 2, "_ts": "2026-04-10T14:03:23Z", "type": "b", "n": 2},
+    ]
+    buf = io.StringIO()
+    _watch_impl(iter(events), buf)
+    lines = buf.getvalue().splitlines()
+    assert len(lines) == 2
+    assert lines[0] == "#1 14:03:22 type=a n=1"
+    assert lines[1] == "#2 14:03:23 type=b n=2"
+
+
+def test_watch_impl_flushes_after_each_event():
+    """Each event must be flushed so Monitor sees it immediately."""
+    flush_count = 0
+
+    class CountingBuf(io.StringIO):
+        def flush(self) -> None:
+            nonlocal flush_count
+            flush_count += 1
+            super().flush()
+
+    events = [
+        {"_seq": 1, "_ts": "2026-04-10T14:03:22Z", "type": "a"},
+        {"_seq": 2, "_ts": "2026-04-10T14:03:23Z", "type": "b"},
+        {"_seq": 3, "_ts": "2026-04-10T14:03:24Z", "type": "c"},
+    ]
+    _watch_impl(iter(events), CountingBuf())
+    # At least one flush per event — pipe-buffered stdout would hide events
+    # from Monitor without explicit flushing.
+    assert flush_count >= 3
+
+
+def test_watch_impl_empty_iterator_writes_nothing():
+    buf = io.StringIO()
+    _watch_impl(iter([]), buf)
+    assert buf.getvalue() == ""
+
+
+# ---------------------------------------------------------------------------
+# CliRunner tests
+# ---------------------------------------------------------------------------
+
+
+def test_watch_missing_topic_exits_nonzero(tmp_path):
+    result = runner.invoke(
+        app,
+        ["watch", "nonexistent", "--stream-dir", str(tmp_path)],
+    )
+    assert result.exit_code != 0
+    assert "nonexistent" in result.output
+
+
+# ---------------------------------------------------------------------------
+# Subprocess smoke test — only way to validate real line-buffered stdout
+# ---------------------------------------------------------------------------
+
+
+def _find_brooklet_script() -> str | None:
+    """Locate the brooklet CLI entry-point script for subprocess testing."""
+    via_path = shutil.which("brooklet")
+    if via_path:
+        return via_path
+    candidate = Path(sys.executable).parent / "brooklet"
+    if candidate.exists():
+        return str(candidate)
+    return None
+
+
+def _readline_with_timeout(stream, timeout: float) -> str:
+    """Read one line from a subprocess stream with a timeout.
+
+    Uses a reader thread + Queue so tests fail cleanly instead of hanging
+    when stdout buffering is broken.
+    """
+    q: queue.Queue = queue.Queue()
+
+    def reader() -> None:
+        line = stream.readline()
+        q.put(line)
+
+    threading.Thread(target=reader, daemon=True).start()
+    try:
+        return q.get(timeout=timeout)
+    except queue.Empty:
+        raise TimeoutError(f"no line received in {timeout}s") from None
+
+
+def test_watch_subprocess_line_buffered(tmp_path):
+    """Spawn `brooklet watch` as a subprocess and verify real line-buffered
+    output reaches the reader before the process exits.
+
+    This is the only way to validate Python stdout buffering behavior under a
+    pipe — CliRunner does not exercise real stdout. If `reconfigure(
+    line_buffering=True)` is missing, this test will time out instead of
+    hanging forever.
+    """
+    brooklet_script = _find_brooklet_script()
+    if brooklet_script is None:
+        pytest.skip("brooklet CLI script not found on PATH")
+
+    stream = brooklet.open(tmp_path)
+    stream.produce("smoke", {"type": "hello", "n": 1})
+
+    proc = subprocess.Popen(
+        [
+            brooklet_script,
+            "watch",
+            "smoke",
+            "--stream-dir",
+            str(tmp_path),
+            "--group",
+            "smoke-test",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        # First event was produced before the subprocess started — it should
+        # arrive via the initial read of the topic file.
+        line1 = _readline_with_timeout(proc.stdout, timeout=10.0)
+        assert line1, "no line read from subprocess stdout"
+        assert "type=hello" in line1
+        assert "n=1" in line1
+
+        # Produce a second event live — verify it arrives via follow mode
+        # and is flushed to stdout before the process exits.
+        stream.produce("smoke", {"type": "ping", "n": 2})
+        line2 = _readline_with_timeout(proc.stdout, timeout=10.0)
+        assert "type=ping" in line2
+        assert "n=2" in line2
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
