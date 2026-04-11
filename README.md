@@ -131,7 +131,7 @@ Unlike `consume --follow`, which emits raw JSON envelopes, `watch` writes compac
 
 For a single pytest run in one shell, a plain `pytest --tb=line | grep PASS` under Monitor is simpler and you should reach for that first. `watch` only pays its keep when one of these matters:
 
-1. **Gapless resume across restarts.** `tail -f` offers "start from current end" (miss the gap) or "start from beginning" (full replay). Brooklet tracks a byte offset per consumer group, so when Monitor's `TaskStop` kills the process or your session restarts later, `watch` picks up exactly where it left off — no replay, no missed events. This is the killer feature that nothing else in the JSONL-tail design space offers.
+1. **Gapless resume across restarts.** `tail -f` gives you "last N lines then follow" out of the box, or "follow from byte 0" with `tail -c +0 -f` — but neither option persists a resume point across restarts, so you either miss events written during the gap or replay everything from the top. Brooklet tracks a byte offset per consumer group, so when Monitor's `TaskStop` kills the process or your session restarts later, `watch` picks up exactly where it left off — no replay, no missed events. This is the killer feature that nothing else in the JSONL-tail design space offers.
 
 2. **Cross-session event bus.** One Claude Code session `produce`s events, another session `watch`es them. Because each consumer group has its own offset, the watcher doesn't need the producer to cooperate, and reconnecting never misses anything. No broker, no server — just appended JSONL files.
 

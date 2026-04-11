@@ -3,7 +3,7 @@
 *2026-04-11T01:33:34Z by Showboat 0.6.1*
 <!-- showboat-id: 10d4ed63-3494-4903-8aff-74335458b12f -->
 
-This demo proves brooklet watch's killer feature: **gapless resumability across restarts**. When you kill a watcher and relaunch it (or Claude Code Monitor's TaskStop kills the process and you relaunch later), brooklet picks up exactly where it left off — no replay, no missed events. `tail -f` structurally cannot do this: it offers start-from-current-end (miss the gap) or start-from-beginning (replay everything), never "resume from the last consumer position".
+This demo proves brooklet watch's killer feature: **gapless resumability across restarts**. When you kill a watcher and relaunch it (or Claude Code Monitor's TaskStop kills the process and you relaunch later), brooklet picks up exactly where it left off — no replay, no missed events. `tail -f` structurally cannot do this: it offers "last N lines then follow" by default, or "follow from byte 0" with `tail -c +0 -f`, but never "resume from the last consumer position" — so across a restart you either miss events written during the gap or replay everything from the top.
 
 This is an executable document. Run `showboat verify docs/demos/watch-gapless-resume.md` from the repo root to confirm the demo still matches the real behavior.
 

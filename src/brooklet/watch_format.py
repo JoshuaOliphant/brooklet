@@ -80,10 +80,16 @@ def format_event(event: Event, max_len: int = 200) -> str:
     - Envelope fields (``_ts``, ``_seq``, ``_src``) are lifted into the prefix
       and skipped from the body.
     - ``None`` values are skipped.
-    - Nested ``dict`` values render as ``key={k:v,k:v}`` (one level deep).
-    - ``list`` values render as ``key=[...N items]``.
-    - Control characters in string values are replaced with spaces — a stray
-      ``\\n`` would split one event into two Monitor notifications.
+    - ``dict`` values render their top-level keys as ``key:value`` pairs inside
+      braces — e.g. ``meta={host:web1,port:8080}``. Any dict or list nested
+      inside that top level is collapsed to the literal string ``{...}`` or
+      ``[...]`` (so ``{"a": {"b": 1}}`` becomes ``{a:{...}}``).
+    - ``list`` values render as the literal ``key=[...N items]`` where the
+      three dots are printed verbatim and ``N`` is ``len(value)`` — e.g. a
+      three-element list becomes ``items=[...3 items]``.
+    - Newlines (``\\n``), carriage returns (``\\r``), and tabs (``\\t``) in
+      string values are replaced with spaces — a stray newline would otherwise
+      split one event into two Monitor notifications.
     - The final line is truncated to ``max_len`` characters with ``…`` suffix.
     """
     seq = _extract_seq(event)
