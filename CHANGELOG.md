@@ -2,11 +2,25 @@
 
 All notable changes to brooklet are documented here.
 
-## [Unreleased]
+## [0.4.0] - 2026-04-11
+
+### Bug Fixes
+
+- Save consumer offsets on exception path (SIGTERM, KeyboardInterrupt)
+- **cli:** Harden brooklet watch against SIGTERM races and per-event errors
+- **consumer:** Exception-safe offset save for glob mode + save-before-assign
+
+### Documentation
+
+- Add changelog, document cat command, and add release reminder hook
+- Document `brooklet watch` and its Monitor integration use cases
+- Add executable showboat demo of brooklet watch gapless resume
+- Fix format_event docstring and README tail -f claim
 
 ### Features
 
 - Add Claude Code harness engineering setup (#7)
+- Add `brooklet watch` command for Claude Code Monitor integration
 
 ## [0.3.0] - 2026-03-24
 
