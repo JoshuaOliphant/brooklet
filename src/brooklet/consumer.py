@@ -112,10 +112,23 @@ class Consumer:
                 yield from self._iterate_follow(f, path)
             else:
                 yield from self._read_lines(f)
-
-            self._offset = SingleFileOffset(byte_offset=f.tell())
-            self._save_offset()
         finally:
+            # Capture and save offset from the current file position, whether
+            # we're exiting normally or via exception (e.g. KeyboardInterrupt
+            # from SIGTERM in long-running follow-mode consumers). Without
+            # this, exception paths would lose the consumer's progress and
+            # break resume-across-restarts.
+            if not f.closed:
+                try:
+                    self._offset = SingleFileOffset(byte_offset=f.tell())
+                    self._save_offset()
+                except OSError as e:
+                    logger.warning(
+                        "Failed to save offset during cleanup (topic=%s, group=%s): %s",
+                        self._topic,
+                        self._group,
+                        e,
+                    )
             self._file_handle = None
             f.close()
 

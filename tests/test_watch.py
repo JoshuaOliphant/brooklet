@@ -2,6 +2,7 @@
 # ABOUTME: Covers _watch_impl unit tests plus a subprocess smoke test for real buffering
 
 import io
+import json
 import queue
 import shutil
 import subprocess
@@ -164,3 +165,57 @@ def test_watch_subprocess_line_buffered(tmp_path):
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.wait()
+
+
+def test_watch_saves_offset_on_sigterm(tmp_path):
+    """SIGTERM (what Monitor's TaskStop sends) must unwind the Consumer
+    context manager so offsets are saved to disk.
+
+    Without an explicit signal handler, Python exits on SIGTERM without
+    running `__exit__`, which would leave `close()` uncalled and offsets
+    unsaved — defeating the resumability that is the whole reason `watch`
+    exists as a separate command from `consume --follow`.
+    """
+    brooklet_script = _find_brooklet_script()
+    if brooklet_script is None:
+        pytest.skip("brooklet CLI script not found on PATH")
+
+    stream = brooklet.open(tmp_path)
+    stream.produce("sigterm", {"type": "a", "n": 1})
+    stream.produce("sigterm", {"type": "b", "n": 2})
+
+    proc = subprocess.Popen(
+        [
+            brooklet_script,
+            "watch",
+            "sigterm",
+            "--stream-dir",
+            str(tmp_path),
+            "--group",
+            "sigterm-test",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        cwd=str(tmp_path),  # work around the pre-existing relative-path bug
+    )
+    try:
+        # Drain both initial events so the Consumer has advanced the file
+        # position past them.
+        _readline_with_timeout(proc.stdout, timeout=10.0)
+        _readline_with_timeout(proc.stdout, timeout=10.0)
+
+        # Send SIGTERM — simulates Monitor's TaskStop.
+        proc.terminate()
+        proc.wait(timeout=5)
+    except Exception:
+        proc.kill()
+        proc.wait()
+        raise
+
+    offset_file = tmp_path / ".brooklet" / "offsets" / "sigterm-test-sigterm.json"
+    assert offset_file.exists(), (
+        f"offset file not saved on SIGTERM at {offset_file} — resumability is broken"
+    )
+    data = json.loads(offset_file.read_text())
+    assert data["offset"] > 0, f"expected non-zero offset past consumed events, got {data}"

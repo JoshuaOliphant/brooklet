@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import signal
 import sys
 from collections.abc import Iterable
 from pathlib import Path
@@ -168,6 +169,15 @@ def watch(
     # on pipes, which would hide events until the buffer fills. This call is
     # essential, not cosmetic.
     sys.stdout.reconfigure(line_buffering=True)
+
+    # Convert SIGTERM to KeyboardInterrupt so the Consumer context manager
+    # unwinds and saves its offset. Monitor's TaskStop sends SIGTERM, which
+    # otherwise exits Python without running __exit__, leaving offsets
+    # unsaved and breaking the resume-across-restarts guarantee.
+    def _sigterm_to_interrupt(signum: int, frame: object) -> None:
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, _sigterm_to_interrupt)
 
     stream = brooklet.open(stream_dir)
     try:
