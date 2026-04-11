@@ -5,6 +5,7 @@ import contextlib
 import fnmatch
 import glob as glob_module
 import logging
+import sys
 import warnings
 from collections.abc import Iterator
 from pathlib import Path
@@ -50,6 +51,10 @@ class Consumer:
         self._offset: SingleFileOffset | GlobOffset = self._load_offset()
         # Per-file byte positions used during glob+follow tailing
         self._file_positions: dict[str, int] = {}
+        # Active file handle + index during glob catch-up, so the finally
+        # block can capture mid-file progress on exception paths.
+        self._glob_active_file = None
+        self._glob_active_index: int = 0
 
     def _load_offset(self) -> SingleFileOffset | GlobOffset:
         """Load offset from storage, returning the appropriate typed offset."""
@@ -58,9 +63,38 @@ class Consumer:
             return GlobOffset.decode(raw)
         return SingleFileOffset.decode(raw)
 
-    def _save_offset(self) -> None:
-        """Save the current offset to storage."""
-        save(self._offsets_dir, self._group, self._topic, self._offset.encode())
+    def _save_offset(self, offset: SingleFileOffset | GlobOffset | None = None) -> None:
+        """Persist an offset to storage.
+
+        If `offset` is None, saves the current in-memory `self._offset`.
+        Passing an explicit value lets callers save a candidate without
+        first mutating instance state — see the single-file finally block
+        for the save-before-assign contract this supports.
+        """
+        target = self._offset if offset is None else offset
+        save(self._offsets_dir, self._group, self._topic, target.encode())
+
+    def _report_save_failure(self, exc: BaseException) -> None:
+        """Report an offset-save failure to both structured logs and stderr.
+
+        brooklet never calls logging.basicConfig, so a bare logger.warning
+        disappears into the null handler by default. For consumers like
+        `brooklet watch`, whose entire value proposition is resume-across-
+        restarts, the user must see the failure — so we also write a
+        single line to stderr. The logger.warning stays so structured-log
+        consumers still capture the event.
+        """
+        logger.warning(
+            "Failed to save offset during cleanup (topic=%s, group=%s): %s",
+            self._topic,
+            self._group,
+            exc,
+        )
+        print(
+            f"brooklet: failed to save offset for topic={self._topic} group={self._group}: {exc}",
+            file=sys.stderr,
+            flush=True,
+        )
 
     def _stop_observer(self, observer) -> None:
         """Stop a watchdog observer with a bounded join timeout."""
@@ -113,22 +147,24 @@ class Consumer:
             else:
                 yield from self._read_lines(f)
         finally:
-            # Capture and save offset from the current file position, whether
-            # we're exiting normally or via exception (e.g. KeyboardInterrupt
-            # from SIGTERM in long-running follow-mode consumers). Without
-            # this, exception paths would lose the consumer's progress and
+            # Must live in finally, not after the yield loop — follow-mode
+            # iterators exit via exception (KeyboardInterrupt from SIGTERM,
+            # typically from a supervisor like Claude Code's Monitor), never
+            # by returning normally. Moving this save out of finally would
+            # silently lose offsets on every non-normal termination and
             # break resume-across-restarts.
             if not f.closed:
+                # Save-before-assign: compute the candidate locally, save
+                # it first, and only rebind self._offset on success. If the
+                # save raises, self._offset stays aligned with on-disk
+                # state so close() and any later inspection see consistent
+                # data.
+                candidate = SingleFileOffset(byte_offset=f.tell())
                 try:
-                    self._offset = SingleFileOffset(byte_offset=f.tell())
-                    self._save_offset()
+                    self._save_offset(candidate)
+                    self._offset = candidate
                 except OSError as e:
-                    logger.warning(
-                        "Failed to save offset during cleanup (topic=%s, group=%s): %s",
-                        self._topic,
-                        self._group,
-                        e,
-                    )
+                    self._report_save_failure(e)
             self._file_handle = None
             f.close()
 
@@ -222,6 +258,13 @@ class Consumer:
                 if i == start_file_index:
                     f.seek(start_byte_offset)
 
+                # Track active file so the batch finally block can capture
+                # mid-file progress if iteration is interrupted (e.g.
+                # KeyboardInterrupt from a supervisor like Claude Code's
+                # Monitor).
+                self._glob_active_file = f
+                self._glob_active_index = i
+
                 yield from self._read_lines(f)
 
                 end_pos = f.tell()
@@ -233,7 +276,19 @@ class Consumer:
                     self._offset = GlobOffset(file_index=i, byte_offset=end_pos)
                 else:
                     self._offset = GlobOffset(file_index=i + 1, byte_offset=0)
+                # Normal path: release the active-file tracker so the
+                # finally below leaves self._offset at the advanced value.
+                self._glob_active_file = None
             finally:
+                # On exception paths (GeneratorExit / user exception raised
+                # through the yield), capture the mid-file position into
+                # self._offset so the outer _iterate_glob finally can persist
+                # it. On the normal path the tracker was already cleared, so
+                # we leave self._offset at its advanced value.
+                if self._glob_active_file is f:
+                    with contextlib.suppress(OSError, ValueError):
+                        self._offset = GlobOffset(file_index=i, byte_offset=f.tell())
+                    self._glob_active_file = None
                 f.close()
 
     def _iterate_glob(self):
@@ -246,8 +301,20 @@ class Consumer:
                 self._topic,
                 self._group,
             )
-        yield from self._catch_up_glob(files)
-        self._save_offset()
+        try:
+            yield from self._catch_up_glob(files)
+        finally:
+            # Must live in finally, not after the yield loop — batch
+            # consumers can be interrupted mid-iteration (KeyboardInterrupt
+            # from SIGTERM, typically from a supervisor like Claude Code's
+            # Monitor). Moving this save out of finally would silently lose
+            # offsets on every non-normal termination and break
+            # resume-across-restarts. _catch_up_glob's inner finally has
+            # already captured any mid-file progress into self._offset.
+            try:
+                self._save_offset()
+            except OSError as e:
+                self._report_save_failure(e)
 
     def _iterate_glob_follow(self):
         """Catch up on existing glob files, then tail for changes and new files."""

@@ -502,3 +502,159 @@ class TestConsumerBatch:
             "file_index" in r.message.lower() or "out of bounds" in r.message.lower()
             for r in error_records
         )
+
+
+class TestConsumerOffsetSaveDurability:
+    """Tests pinning exception-safe offset save contracts for batch modes."""
+
+    def test_glob_batch_saves_offset_on_exception_midway(self, tmp_path, offsets_dir):
+        """Glob batch consumer must persist offset when iteration raises mid-flight."""
+        from brooklet.offsets import load
+        from brooklet.types import GlobOffset
+
+        dir_ = tmp_path / "sessions"
+        dir_.mkdir()
+        for name, events in [
+            ("a.jsonl", [{"type": "a1"}, {"type": "a2"}]),
+            ("b.jsonl", [{"type": "b1"}, {"type": "b2"}]),
+        ]:
+            path = dir_ / name
+            with open(path, "w") as f:
+                for e in events:
+                    f.write(json.dumps(e) + "\n")
+
+        consumer = Consumer(
+            path=str(dir_ / "*.jsonl"),
+            mode="glob",
+            group="test",
+            topic="glob-interrupt",
+            offsets_dir=offsets_dir,
+        )
+
+        collected = []
+        with pytest.raises(RuntimeError, match="simulated interrupt"):
+            for event in consumer:
+                collected.append(event)
+                if len(collected) == 2:
+                    # Simulate KeyboardInterrupt/SIGTERM-style bail-out while
+                    # the generator is still mid-iteration.
+                    raise RuntimeError("simulated interrupt")
+
+        # Offset file must exist with non-zero GlobOffset state so that a
+        # restart can resume where we left off.
+        raw = load(offsets_dir, "test", "glob-interrupt")
+        assert raw > 0
+        persisted = GlobOffset.decode(raw)
+        assert persisted.byte_offset > 0 or persisted.file_index > 0
+
+    def test_glob_batch_saves_offset_without_explicit_close(self, tmp_path, offsets_dir):
+        """Exhausting a glob batch iterator must save the offset via finally,
+        even when the caller never calls close()."""
+        from brooklet.offsets import load
+        from brooklet.types import GlobOffset
+
+        dir_ = tmp_path / "sessions"
+        dir_.mkdir()
+        for name, events in [
+            ("a.jsonl", [{"type": "a1"}]),
+            ("b.jsonl", [{"type": "b1"}]),
+        ]:
+            path = dir_ / name
+            with open(path, "w") as f:
+                for e in events:
+                    f.write(json.dumps(e) + "\n")
+
+        consumer = Consumer(
+            path=str(dir_ / "*.jsonl"),
+            mode="glob",
+            group="test",
+            topic="glob-exhaust",
+            offsets_dir=offsets_dir,
+        )
+        events = list(consumer)  # exhaust — do NOT call close()
+        assert len(events) == 2
+
+        raw = load(offsets_dir, "test", "glob-exhaust")
+        persisted = GlobOffset.decode(raw)
+        assert persisted.file_index == 1
+        assert persisted.byte_offset > 0
+
+    def test_single_file_batch_saves_offset_without_explicit_close(self, sample_jsonl, offsets_dir):
+        """Exhausting a single-file iterator must save the offset via finally,
+        even when the caller never calls close()."""
+        from brooklet.offsets import load
+
+        consumer = Consumer(
+            path=str(sample_jsonl),
+            mode="single-file",
+            group="test",
+            topic="sf-exhaust",
+            offsets_dir=offsets_dir,
+        )
+        list(consumer)  # exhaust — no close()
+        offset = load(offsets_dir, group="test", topic="sf-exhaust")
+        assert offset > 0
+
+    def test_single_file_save_failure_preserves_in_memory_offset(
+        self, sample_jsonl, offsets_dir, monkeypatch, capsys
+    ):
+        """If _save_offset raises, in-memory self._offset must NOT be clobbered,
+        and the failure must surface on stderr (not just the null logger)."""
+        from brooklet.types import SingleFileOffset
+
+        consumer = Consumer(
+            path=str(sample_jsonl),
+            mode="single-file",
+            group="test",
+            topic="sf-save-fail",
+            offsets_dir=offsets_dir,
+        )
+
+        # Pin the initial in-memory offset before iteration.
+        original = consumer._offset
+        assert isinstance(original, SingleFileOffset)
+
+        # Make _save_offset raise an OSError the way a failing disk would.
+        def boom(*_args, **_kwargs) -> None:
+            raise OSError("disk full")
+
+        monkeypatch.setattr(consumer, "_save_offset", boom)
+
+        list(consumer)  # iteration swallows the OSError in the finally handler
+
+        # In-memory offset must still be the original — we must not clobber
+        # with an unsaved value and diverge from on-disk state.
+        assert consumer._offset is original
+
+        # Save failure must be visible on stderr (not buried in null logger).
+        captured = capsys.readouterr()
+        assert "brooklet" in captured.err
+        assert "sf-save-fail" in captured.err
+
+    def test_glob_save_failure_preserves_in_memory_offset(
+        self, tmp_path, offsets_dir, monkeypatch, capsys
+    ):
+        """Glob batch: on save failure, in-memory offset is preserved and
+        the failure is visible on stderr."""
+        dir_ = tmp_path / "sessions"
+        dir_.mkdir()
+        (dir_ / "a.jsonl").write_text(json.dumps({"type": "a1"}) + "\n")
+
+        consumer = Consumer(
+            path=str(dir_ / "*.jsonl"),
+            mode="glob",
+            group="test",
+            topic="glob-save-fail",
+            offsets_dir=offsets_dir,
+        )
+
+        def boom(*_args, **_kwargs) -> None:
+            raise OSError("disk full")
+
+        monkeypatch.setattr(consumer, "_save_offset", boom)
+
+        list(consumer)
+
+        captured = capsys.readouterr()
+        assert "brooklet" in captured.err
+        assert "glob-save-fail" in captured.err
