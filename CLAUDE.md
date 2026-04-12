@@ -12,6 +12,7 @@ Brooklet is a **consumer coordination layer**, not a message broker. External to
 - `registry.py` — Maps topic names to sources; supports external (registered) and local (produced)
 - `consumer.py` — Batch and follow-mode iterators over JSONL files
 - `stream.py` — Orchestrator: `register()`, `produce()`, `consume()`, `topics()`
+- `config.py` — Stream dir resolution with 5-layer config precedence (DEC-013)
 - `cli.py` — Unified CLI entry point; Typer app with core commands and plugin loading
 - `types.py` — Shared type definitions (Mode, Event, offset dataclasses, SourceDef)
 - `plugins.py` — Plugin system using pluggy for CLI extensibility
@@ -29,6 +30,7 @@ Brooklet is a **consumer coordination layer**, not a message broker. External to
 - watchdog for filesystem watching in follow mode (DEC-008)
 - Python 3.12+ minimum (DEC-009)
 - Path-style topic names (`scout/stats`) create nested directories
+- Config precedence: CLI flag > .brooklet.toml > BROOKLET_DIR env > user config > git root (DEC-013)
 - Full decision records at `docs/decisions/`
 
 ### Data Layout

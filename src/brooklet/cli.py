@@ -14,6 +14,7 @@ import pluggy
 import typer
 
 import brooklet
+from brooklet.config import resolve_stream_dir
 from brooklet.plugins import get_plugin_manager
 from brooklet.types import Event, Mode
 from brooklet.watch_format import format_event
@@ -43,11 +44,10 @@ def _app_callback(
 
 
 STREAM_DIR_OPTION = Annotated[
-    Path,
+    Path | None,
     typer.Option(
         "--stream-dir",
-        envvar="BROOKLET_DIR",
-        help="Path to the brooklet stream directory.",
+        help="Path to the brooklet stream directory (overrides .brooklet.toml and BROOKLET_DIR).",
     ),
 ]
 
@@ -57,20 +57,20 @@ def register(
     name: Annotated[str, typer.Argument(help="Topic name to register.")],
     path: Annotated[str, typer.Argument(help="File path or glob pattern.")],
     mode: Annotated[Mode, typer.Option(help="Source mode: single-file or glob.")] = "single-file",
-    stream_dir: STREAM_DIR_OPTION = Path("."),
+    stream_dir: STREAM_DIR_OPTION = None,
 ) -> None:
     """Register an external JSONL source as a named topic."""
-    stream = brooklet.open(stream_dir)
+    stream = brooklet.open(resolve_stream_dir(cli_flag=stream_dir))
     stream.register(name, path, mode)
 
 
 @app.command(rich_help_panel="Core Commands")
 def topics(
-    stream_dir: STREAM_DIR_OPTION = Path("."),
+    stream_dir: STREAM_DIR_OPTION = None,
     json_output: Annotated[bool, typer.Option("--json", help="Output as JSON array.")] = False,
 ) -> None:
     """List registered topics."""
-    stream = brooklet.open(stream_dir)
+    stream = brooklet.open(resolve_stream_dir(cli_flag=stream_dir))
     topic_list = stream.topics()
     if json_output:
         typer.echo(json.dumps(topic_list))
@@ -82,11 +82,11 @@ def topics(
 @app.command(rich_help_panel="Core Commands")
 def produce(
     topic: Annotated[str, typer.Argument(help="Topic name to produce events to.")],
-    stream_dir: STREAM_DIR_OPTION = Path("."),
+    stream_dir: STREAM_DIR_OPTION = None,
     source: Annotated[str | None, typer.Option(help="Producer identifier for _src field.")] = None,
 ) -> None:
     """Produce events to a topic from stdin (one JSON object per line)."""
-    stream = brooklet.open(stream_dir)
+    stream = brooklet.open(resolve_stream_dir(cli_flag=stream_dir))
     line_num = 0
     for line in sys.stdin:
         line_num += 1
@@ -116,11 +116,11 @@ def produce(
 def consume(
     topic: Annotated[str, typer.Argument(help="Topic name to consume events from.")],
     group: Annotated[str, typer.Option(help="Consumer group name for offset tracking.")],
-    stream_dir: STREAM_DIR_OPTION = Path("."),
+    stream_dir: STREAM_DIR_OPTION = None,
     follow: Annotated[bool, typer.Option("--follow", help="Tail for new events.")] = False,
 ) -> None:
     """Consume events from a topic to stdout (one JSON object per line)."""
-    stream = brooklet.open(stream_dir)
+    stream = brooklet.open(resolve_stream_dir(cli_flag=stream_dir))
     try:
         consumer_ctx = stream.consume(topic, group=group, follow=follow)
     except KeyError:
@@ -175,7 +175,7 @@ def watch(
             ),
         ),
     ] = "watch",
-    stream_dir: STREAM_DIR_OPTION = Path("."),
+    stream_dir: STREAM_DIR_OPTION = None,
 ) -> None:
     """Tail a topic, emitting one compact line per event.
 
@@ -207,7 +207,7 @@ def watch(
         # This call is essential, not cosmetic.
         sys.stdout.reconfigure(line_buffering=True)
 
-        stream = brooklet.open(stream_dir)
+        stream = brooklet.open(resolve_stream_dir(cli_flag=stream_dir))
         try:
             consumer_ctx = stream.consume(topic, group=group, follow=True)
         except KeyError:
@@ -225,10 +225,10 @@ def watch(
 @app.command(rich_help_panel="Core Commands")
 def cat(
     topic: Annotated[str, typer.Argument(help="Topic name to read.")],
-    stream_dir: STREAM_DIR_OPTION = Path("."),
+    stream_dir: STREAM_DIR_OPTION = None,
 ) -> None:
     """Dump all events from a topic without advancing offsets (read-only)."""
-    stream = brooklet.open(stream_dir)
+    stream = brooklet.open(resolve_stream_dir(cli_flag=stream_dir))
     try:
         source = stream._registry.get(topic)
     except KeyError:

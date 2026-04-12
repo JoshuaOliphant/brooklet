@@ -251,3 +251,43 @@ def test_stream_dir_env_var(tmp_path, monkeypatch):
 
     result = runner.invoke(app, ["topics"])
     assert "env-topic" in result.output
+
+
+def test_stream_dir_from_brooklet_toml(tmp_path, monkeypatch):
+    """CLI picks up .brooklet.toml without --stream-dir flag."""
+    stream_dir = tmp_path / "my-streams"
+    stream_dir.mkdir()
+
+    # Write .brooklet.toml pointing to the stream directory
+    toml = tmp_path / ".brooklet.toml"
+    toml.write_text(f'stream_dir = "{stream_dir}"\n')
+
+    # Produce some data so we can verify the right dir was used
+    stream = brooklet.open(stream_dir)
+    stream.produce("toml-topic", {"type": "hello"})
+
+    # Run CLI from the directory with the toml, no --stream-dir
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("BROOKLET_DIR", raising=False)
+    result = runner.invoke(app, ["topics"])
+    assert "toml-topic" in result.output
+
+
+def test_cli_flag_overrides_brooklet_toml(tmp_path, monkeypatch):
+    """--stream-dir flag takes priority over .brooklet.toml."""
+    toml_dir = tmp_path / "toml-streams"
+    toml_dir.mkdir()
+    flag_dir = tmp_path / "flag-streams"
+    flag_dir.mkdir()
+
+    toml = tmp_path / ".brooklet.toml"
+    toml.write_text(f'stream_dir = "{toml_dir}"\n')
+
+    # Produce to the flag dir
+    stream = brooklet.open(flag_dir)
+    stream.produce("flag-topic", {"type": "hello"})
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("BROOKLET_DIR", raising=False)
+    result = runner.invoke(app, ["topics", "--stream-dir", str(flag_dir)])
+    assert "flag-topic" in result.output
