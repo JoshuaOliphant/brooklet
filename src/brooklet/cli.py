@@ -14,7 +14,7 @@ import pluggy
 import typer
 
 import brooklet
-from brooklet.config import resolve_stream_dir
+from brooklet.config import ConfigError, resolve_stream_dir
 from brooklet.plugins import get_plugin_manager
 from brooklet.types import Event, Mode
 from brooklet.watch_format import format_event
@@ -52,6 +52,15 @@ STREAM_DIR_OPTION = Annotated[
 ]
 
 
+def _resolve_or_exit(cli_flag: Path | None) -> Path:
+    """Resolve the stream directory, exiting cleanly on config errors."""
+    try:
+        return resolve_stream_dir(cli_flag=cli_flag)
+    except ConfigError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1) from None
+
+
 @app.command(rich_help_panel="Core Commands")
 def register(
     name: Annotated[str, typer.Argument(help="Topic name to register.")],
@@ -60,7 +69,7 @@ def register(
     stream_dir: STREAM_DIR_OPTION = None,
 ) -> None:
     """Register an external JSONL source as a named topic."""
-    stream = brooklet.open(resolve_stream_dir(cli_flag=stream_dir))
+    stream = brooklet.open(_resolve_or_exit(stream_dir))
     stream.register(name, path, mode)
 
 
@@ -70,7 +79,7 @@ def topics(
     json_output: Annotated[bool, typer.Option("--json", help="Output as JSON array.")] = False,
 ) -> None:
     """List registered topics."""
-    stream = brooklet.open(resolve_stream_dir(cli_flag=stream_dir))
+    stream = brooklet.open(_resolve_or_exit(stream_dir))
     topic_list = stream.topics()
     if json_output:
         typer.echo(json.dumps(topic_list))
@@ -86,7 +95,7 @@ def produce(
     source: Annotated[str | None, typer.Option(help="Producer identifier for _src field.")] = None,
 ) -> None:
     """Produce events to a topic from stdin (one JSON object per line)."""
-    stream = brooklet.open(resolve_stream_dir(cli_flag=stream_dir))
+    stream = brooklet.open(_resolve_or_exit(stream_dir))
     line_num = 0
     for line in sys.stdin:
         line_num += 1
@@ -120,7 +129,7 @@ def consume(
     follow: Annotated[bool, typer.Option("--follow", help="Tail for new events.")] = False,
 ) -> None:
     """Consume events from a topic to stdout (one JSON object per line)."""
-    stream = brooklet.open(resolve_stream_dir(cli_flag=stream_dir))
+    stream = brooklet.open(_resolve_or_exit(stream_dir))
     try:
         consumer_ctx = stream.consume(topic, group=group, follow=follow)
     except KeyError:
@@ -207,7 +216,7 @@ def watch(
         # This call is essential, not cosmetic.
         sys.stdout.reconfigure(line_buffering=True)
 
-        stream = brooklet.open(resolve_stream_dir(cli_flag=stream_dir))
+        stream = brooklet.open(_resolve_or_exit(stream_dir))
         try:
             consumer_ctx = stream.consume(topic, group=group, follow=True)
         except KeyError:
@@ -228,7 +237,7 @@ def cat(
     stream_dir: STREAM_DIR_OPTION = None,
 ) -> None:
     """Dump all events from a topic without advancing offsets (read-only)."""
-    stream = brooklet.open(resolve_stream_dir(cli_flag=stream_dir))
+    stream = brooklet.open(_resolve_or_exit(stream_dir))
     try:
         source = stream._registry.get(topic)
     except KeyError:

@@ -291,3 +291,17 @@ def test_cli_flag_overrides_brooklet_toml(tmp_path, monkeypatch):
     monkeypatch.delenv("BROOKLET_DIR", raising=False)
     result = runner.invoke(app, ["topics", "--stream-dir", str(flag_dir)])
     assert "flag-topic" in result.output
+
+
+def test_cli_shows_clean_error_for_invalid_toml(tmp_path, monkeypatch):
+    """Invalid .brooklet.toml produces a clean error, not a raw traceback."""
+    toml = tmp_path / ".brooklet.toml"
+    toml.write_text("stream_dir = no quotes\n")
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("BROOKLET_DIR", raising=False)
+    result = runner.invoke(app, ["topics"])
+    assert result.exit_code != 0
+    assert "Error" in result.output
+    # Should NOT contain a Python traceback
+    assert "Traceback" not in result.output

@@ -6,12 +6,16 @@ import tomllib
 from pathlib import Path
 
 
+class ConfigError(Exception):
+    """Raised when a brooklet config file is invalid or unreadable."""
+
+
 def resolve_stream_dir(cli_flag: Path | None = None) -> Path:
     """Resolve the stream directory using a 5-layer config precedence chain.
 
     Precedence (highest to lowest):
         1. Explicit CLI flag (--stream-dir)
-        2. .brooklet.toml found by walking up to the git root
+        2. .brooklet.toml (walk up from cwd, git root is the ceiling)
         3. BROOKLET_DIR environment variable
         4. ~/.config/brooklet/config.toml (user-wide)
         5. Git repo root, or cwd if not in a repo
@@ -21,6 +25,10 @@ def resolve_stream_dir(cli_flag: Path | None = None) -> Path:
 
     Returns:
         Resolved Path for the stream directory.
+
+    Raises:
+        ConfigError: If a config file exists but is invalid, unreadable,
+            or missing the required ``stream_dir`` key.
     """
     # Layer 1: explicit CLI flag
     if cli_flag is not None:
@@ -84,10 +92,32 @@ def _read_stream_dir(config_path: Path) -> Path:
     """Read the stream_dir value from a TOML config file.
 
     Relative paths are resolved relative to the config file's parent directory.
+
+    Raises:
+        ConfigError: If the file is unreadable, has invalid TOML syntax,
+            is missing the ``stream_dir`` key, or the value is not a string.
     """
-    with open(config_path, "rb") as f:
-        data = tomllib.load(f)
-    raw = data.get("stream_dir", ".")
+    try:
+        with open(config_path, "rb") as f:
+            data = tomllib.load(f)
+    except PermissionError as e:
+        raise ConfigError(f"Cannot read config file {config_path}: {e}") from e
+    except tomllib.TOMLDecodeError as e:
+        raise ConfigError(f"Invalid TOML in {config_path}: {e}") from e
+
+    if "stream_dir" not in data:
+        raise ConfigError(
+            f"Config file {config_path} is missing the required 'stream_dir' key. "
+            f"Found keys: {sorted(data.keys())}"
+        )
+
+    raw = data["stream_dir"]
+    if not isinstance(raw, str):
+        raise ConfigError(
+            f"'stream_dir' in {config_path} must be a string, "
+            f"got {type(raw).__name__}: {raw!r}"
+        )
+
     path = Path(raw)
     if not path.is_absolute():
         path = config_path.parent / path

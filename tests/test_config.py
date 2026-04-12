@@ -3,7 +3,9 @@
 
 from unittest.mock import patch
 
-from brooklet.config import find_config_file, resolve_stream_dir
+import pytest
+
+from brooklet.config import ConfigError, find_config_file, resolve_stream_dir
 
 
 class TestResolvePrecedence:
@@ -177,6 +179,61 @@ class TestFindConfigFile:
 
         result = find_config_file(".brooklet.toml", start=subdir)
         assert result == toml
+
+
+class TestConfigErrors:
+    """Error handling for malformed or invalid config files."""
+
+    def test_invalid_toml_raises_config_error(self, tmp_path, monkeypatch):
+        """Invalid TOML syntax produces a clear ConfigError, not a raw traceback."""
+        toml = tmp_path / ".brooklet.toml"
+        toml.write_text("stream_dir = no quotes here\n")
+        monkeypatch.chdir(tmp_path)
+
+        with pytest.raises(ConfigError, match=r"\.brooklet\.toml"):
+            resolve_stream_dir()
+
+    def test_missing_stream_dir_key_raises_config_error(self, tmp_path, monkeypatch):
+        """Config file without stream_dir key raises ConfigError listing found keys."""
+        toml = tmp_path / ".brooklet.toml"
+        toml.write_text('[other]\nfoo = "bar"\n')
+        monkeypatch.chdir(tmp_path)
+
+        with pytest.raises(ConfigError, match="stream_dir"):
+            resolve_stream_dir()
+
+    def test_stream_dir_wrong_type_raises_config_error(self, tmp_path, monkeypatch):
+        """Non-string stream_dir value produces a clear error."""
+        toml = tmp_path / ".brooklet.toml"
+        toml.write_text("stream_dir = 42\n")
+        monkeypatch.chdir(tmp_path)
+
+        with pytest.raises(ConfigError, match="string"):
+            resolve_stream_dir()
+
+    def test_unreadable_config_raises_config_error(self, tmp_path, monkeypatch):
+        """Permission-denied on config file produces a clear ConfigError."""
+        toml = tmp_path / ".brooklet.toml"
+        toml.write_text('stream_dir = "."\n')
+        toml.chmod(0o000)
+        monkeypatch.chdir(tmp_path)
+
+        try:
+            with pytest.raises(ConfigError, match="Cannot read"):
+                resolve_stream_dir()
+        finally:
+            # Restore permissions so tmp_path cleanup works
+            toml.chmod(0o644)
+
+    def test_config_error_includes_file_path(self, tmp_path, monkeypatch):
+        """Error messages include the offending config file path."""
+        toml = tmp_path / ".brooklet.toml"
+        toml.write_text("not valid toml {{{\n")
+        monkeypatch.chdir(tmp_path)
+
+        with pytest.raises(ConfigError) as exc_info:
+            resolve_stream_dir()
+        assert str(tmp_path / ".brooklet.toml") in str(exc_info.value)
 
 
 class TestGitRootDetection:
