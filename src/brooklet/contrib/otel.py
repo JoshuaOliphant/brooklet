@@ -3,9 +3,14 @@
 
 from __future__ import annotations
 
+import logging
 from contextlib import contextmanager
 
+_logger = logging.getLogger("brooklet")
+
 _OTEL_AVAILABLE = False
+_metrics_api = None
+_trace_api = None
 
 try:
     from opentelemetry import metrics as _metrics_api
@@ -20,7 +25,9 @@ try:
 
     _OTEL_AVAILABLE = True
 except ImportError:
-    pass
+    # Clean up any partially-imported names from a broken install
+    _metrics_api = None
+    _trace_api = None
 
 
 # ---------------------------------------------------------------------------
@@ -106,6 +113,10 @@ def configure(endpoint: str = "http://127.0.0.1:4318") -> bool:
     global tracer, meter, _configured  # noqa: PLW0603
 
     if not _OTEL_AVAILABLE:
+        _logger.debug(
+            "OTel SDK not available — instrumentation disabled. "
+            "Install with: uv sync --group otel"
+        )
         return False
 
     if _configured:

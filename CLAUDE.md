@@ -20,6 +20,7 @@ Brooklet is a **consumer coordination layer**, not a message broker. External to
 ### Contrib Adapters (3-layer pattern: parsing → consumer integration → CLI)
 - `contrib/claude_analytics.py` — Claude Code session analytics (`brooklet scout scan`)
 - `contrib/pytest_analytics.py` — pytest-reportlog test run analytics (`brooklet pytest scan`)
+- `contrib/otel.py` — Optional OpenTelemetry instrumentation (tracing + metrics); no-op without SDK
 
 ### Key Decisions
 - `produce()` is in core — consumers that transform and re-emit need a clean write path (DEC-011)
@@ -29,6 +30,7 @@ Brooklet is a **consumer coordination layer**, not a message broker. External to
 - watchdog for filesystem watching in follow mode (DEC-008)
 - Python 3.12+ minimum (DEC-009)
 - Path-style topic names (`scout/stats`) create nested directories
+- Config precedence: CLI flag > .brooklet.toml > BROOKLET_DIR env > user config > git root (DEC-013)
 - Full decision records at `docs/decisions/`
 
 ### Data Layout

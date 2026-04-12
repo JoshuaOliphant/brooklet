@@ -10,7 +10,7 @@ import warnings
 from collections.abc import Iterator
 from pathlib import Path
 
-from brooklet.contrib.otel import meter
+from brooklet.contrib import otel
 from brooklet.envelope import wrap
 from brooklet.offsets import load, save
 from brooklet.types import Event, GlobOffset, Mode, SingleFileOffset
@@ -18,15 +18,6 @@ from brooklet.types import Event, GlobOffset, Mode, SingleFileOffset
 logger = logging.getLogger("brooklet")
 
 _OBSERVER_JOIN_TIMEOUT = 5
-
-_events_consumed = meter.create_counter(
-    "brooklet.events_consumed",
-    description="Total events consumed",
-)
-_batch_size = meter.create_histogram(
-    "brooklet.batch_size",
-    description="Events per read_lines batch",
-)
 
 
 class Consumer:
@@ -184,19 +175,25 @@ class Consumer:
         Uses readline() instead of iteration to keep tell() available.
         """
         count = 0
-        while True:
-            line = f.readline()
-            if not line:
-                break
-            self._seq += 1
-            event = wrap(line, seq=self._seq, source=self._source)
-            if event is not None:
-                count += 1
-                yield event
-        if count:
-            attrs = {"topic": self._topic}
-            _events_consumed.add(count, attrs)
-            _batch_size.record(count, attrs)
+        try:
+            while True:
+                line = f.readline()
+                if not line:
+                    break
+                self._seq += 1
+                event = wrap(line, seq=self._seq, source=self._source)
+                if event is not None:
+                    count += 1
+                    yield event
+        finally:
+            if count:
+                attrs = {"topic": self._topic}
+                otel.meter.create_counter(
+                    "brooklet.events_consumed", description="Total events consumed"
+                ).add(count, attrs)
+                otel.meter.create_histogram(
+                    "brooklet.batch_size", description="Events per read_lines batch"
+                ).record(count, attrs)
 
     def _catch_up_glob(self, files: list[str]) -> Iterator[Event]:
         """Read all unread events from glob-matched files, updating offset.

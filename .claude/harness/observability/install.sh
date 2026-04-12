@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Observability stack installer — downloads VictoriaMetrics, VictoriaLogs, and Vector binaries.
 # Idempotent: skips download if correct version already present.
+# Supports macOS (darwin) and Linux on amd64/arm64.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -11,6 +12,19 @@ VM_VERSION="v1.139.0"
 VL_VERSION="v1.24.0-victorialogs"
 VECTOR_VERSION="v0.54.0"
 
+# Detect platform
+OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
+RAW_ARCH="$(uname -m)"
+
+case "$RAW_ARCH" in
+    x86_64)  ARCH="amd64" ;;
+    arm64)   ARCH="arm64" ;;
+    aarch64) ARCH="arm64" ;;
+    *)       echo "ERROR: Unsupported architecture: $RAW_ARCH" >&2; exit 1 ;;
+esac
+
+echo "Platform: ${OS}/${ARCH}"
+
 mkdir -p "$BIN_DIR"
 
 download_victoria_metrics() {
@@ -20,8 +34,16 @@ download_victoria_metrics() {
         return 0
     fi
     echo "Downloading VictoriaMetrics ${VM_VERSION}..."
-    local url="https://github.com/VictoriaMetrics/VictoriaMetrics/releases/download/${VM_VERSION}/victoria-metrics-linux-amd64-${VM_VERSION}.tar.gz"
-    curl -sfL "$url" | tar xz -C "$BIN_DIR"
+    local url="https://github.com/VictoriaMetrics/VictoriaMetrics/releases/download/${VM_VERSION}/victoria-metrics-${OS}-${ARCH}-${VM_VERSION}.tar.gz"
+    local tmpfile
+    tmpfile=$(mktemp)
+    if ! curl -sfL "$url" -o "$tmpfile"; then
+        echo "ERROR: Failed to download VictoriaMetrics from $url" >&2
+        rm -f "$tmpfile"
+        return 1
+    fi
+    tar xz -C "$BIN_DIR" -f "$tmpfile"
+    rm -f "$tmpfile"
     chmod +x "$binary"
     echo "VictoriaMetrics ${VM_VERSION}: $("$binary" --version 2>&1 | head -1)"
 }
@@ -33,8 +55,16 @@ download_victoria_logs() {
         return 0
     fi
     echo "Downloading VictoriaLogs ${VL_VERSION}..."
-    local url="https://github.com/VictoriaMetrics/VictoriaMetrics/releases/download/${VL_VERSION}/victoria-logs-linux-amd64-${VL_VERSION}.tar.gz"
-    curl -sfL "$url" | tar xz -C "$BIN_DIR"
+    local url="https://github.com/VictoriaMetrics/VictoriaMetrics/releases/download/${VL_VERSION}/victoria-logs-${OS}-${ARCH}-${VL_VERSION}.tar.gz"
+    local tmpfile
+    tmpfile=$(mktemp)
+    if ! curl -sfL "$url" -o "$tmpfile"; then
+        echo "ERROR: Failed to download VictoriaLogs from $url" >&2
+        rm -f "$tmpfile"
+        return 1
+    fi
+    tar xz -C "$BIN_DIR" -f "$tmpfile"
+    rm -f "$tmpfile"
     chmod +x "$binary"
     echo "VictoriaLogs ${VL_VERSION}: $("$binary" --version 2>&1 | head -1)"
 }
@@ -46,11 +76,33 @@ download_vector() {
         return 0
     fi
     echo "Downloading Vector ${VECTOR_VERSION}..."
-    local url="https://github.com/vectordotdev/vector/releases/download/${VECTOR_VERSION}/vector-${VECTOR_VERSION#v}-x86_64-unknown-linux-gnu.tar.gz"
+
+    # Vector uses different naming per platform
+    local vector_arch="$RAW_ARCH"  # Vector uses raw arch names (x86_64, aarch64)
+    if [ "$RAW_ARCH" = "arm64" ]; then
+        vector_arch="aarch64"
+    fi
+
+    local vector_target
+    case "$OS" in
+        darwin) vector_target="${vector_arch}-apple-darwin" ;;
+        linux)  vector_target="${vector_arch}-unknown-linux-gnu" ;;
+        *)      echo "ERROR: Unsupported OS for Vector: $OS" >&2; return 1 ;;
+    esac
+
+    local url="https://github.com/vectordotdev/vector/releases/download/${VECTOR_VERSION}/vector-${VECTOR_VERSION#v}-${vector_target}.tar.gz"
+    local tmpfile
+    tmpfile=$(mktemp)
+    if ! curl -sfL "$url" -o "$tmpfile"; then
+        echo "ERROR: Failed to download Vector from $url" >&2
+        rm -f "$tmpfile"
+        return 1
+    fi
     local tmpdir
     tmpdir=$(mktemp -d)
-    curl -sfL "$url" | tar xz -C "$tmpdir"
-    mv -f "$tmpdir"/vector-x86_64-unknown-linux-gnu/bin/vector "$binary"
+    tar xz -C "$tmpdir" -f "$tmpfile"
+    rm -f "$tmpfile"
+    mv -f "$tmpdir"/vector-${vector_target}/bin/vector "$binary"
     rm -rf "$tmpdir"
     chmod +x "$binary"
     echo "Vector ${VECTOR_VERSION}: $("$binary" --version 2>&1 | head -1)"

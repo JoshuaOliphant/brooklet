@@ -1,15 +1,13 @@
 # ABOUTME: Tests for OpenTelemetry instrumentation no-op path
 # ABOUTME: Verifies that otel module works without OTel SDK installed
 
+from brooklet.contrib import otel
 from brooklet.contrib.otel import (
     _NoOpCounter,
     _NoOpHistogram,
     _NoOpMeter,
     _NoOpSpan,
     _NoOpTracer,
-    configure,
-    meter,
-    tracer,
 )
 
 
@@ -53,15 +51,15 @@ class TestModuleLevelHandles:
     """Module-level tracer and meter must be usable without OTel installed."""
 
     def test_tracer_span(self):
-        with tracer.start_as_current_span("test-span") as span:
+        with otel.tracer.start_as_current_span("test-span") as span:
             span.set_attribute("key", "value")
 
     def test_meter_counter(self):
-        counter = meter.create_counter("test.counter")
+        counter = otel.meter.create_counter("test.counter")
         counter.add(1)
 
     def test_meter_histogram(self):
-        hist = meter.create_histogram("test.hist")
+        hist = otel.meter.create_histogram("test.hist")
         hist.record(10)
 
 
@@ -71,5 +69,5 @@ class TestConfigure:
     def test_configure_without_otel_returns_false(self):
         # Since OTel is not in the dev dependency group, this should return False
         # (or True if OTel happens to be installed — both are valid)
-        result = configure()
+        result = otel.configure()
         assert isinstance(result, bool)

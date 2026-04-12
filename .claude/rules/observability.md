@@ -74,9 +74,32 @@ uv sync --group otel
 
 Then call `configure()` early in your code:
 ```python
-from brooklet.contrib.otel import configure
-configure()  # connects to Vector at http://127.0.0.1:4318
+from brooklet.contrib import otel
+otel.configure()  # connects to Vector at http://127.0.0.1:4318
 ```
+
+### Real-Time Monitoring
+
+Use the Monitor tool to stream observability data while working on a task:
+
+```bash
+# Stream logs in real time — start a polling loop in background, use Monitor to watch
+bash -c 'while true; do curl -s "http://127.0.0.1:9428/select/logsql/query?query=*&limit=5&start=30s" 2>/dev/null | jq -c ".[]" 2>/dev/null; sleep 5; done' &
+# Then use the Monitor tool on the background process to stream events
+
+# Watch a specific metric change during test runs
+bash -c 'while true; do val=$(curl -s "http://127.0.0.1:8428/api/v1/query?query=brooklet_events_consumed_total" 2>/dev/null | jq -r ".data.result[0].value[1] // \"0\"" 2>/dev/null); echo "events_consumed=$val"; sleep 2; done' &
+```
+
+### When to Query (Workflow Guidance)
+
+| Scenario | What to check |
+|----------|--------------|
+| **Debugging follow-mode** | `brooklet_events_consumed_total` — are events being read? Then check VictoriaLogs for warnings |
+| **After running tests** | Query `_stream:brooklet` logs to see if instrumented code paths fired |
+| **Performance work** | `rate(brooklet_events_produced_total[5m])` for throughput during benchmarks |
+| **Verifying a logging fix** | Query VictoriaLogs after reproducing the bug to confirm the warning/error appears |
+| **Investigating consumer lag** | Compare `brooklet_events_produced_total` vs `brooklet_events_consumed_total` per topic |
 
 ### Ports
 

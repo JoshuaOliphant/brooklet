@@ -19,14 +19,22 @@ if [ ! -f "$BIN_DIR/victoria-logs-prod" ] || [ ! -f "$BIN_DIR/victoria-metrics-p
 fi
 
 is_running() {
-    local pidfile="$PID_DIR/$1.pid"
+    local name="$1"
+    local pidfile="$PID_DIR/$name.pid"
     if [ -f "$pidfile" ]; then
         local pid
         pid=$(cat "$pidfile")
         if kill -0 "$pid" 2>/dev/null; then
-            return 0
+            # Verify the PID belongs to the expected binary
+            local cmdname
+            cmdname=$(ps -p "$pid" -o comm= 2>/dev/null || echo "")
+            case "$name" in
+                victoria-logs)    echo "$cmdname" | grep -q "victoria-logs" && return 0 ;;
+                victoria-metrics) echo "$cmdname" | grep -q "victoria-metrics" && return 0 ;;
+                vector)           echo "$cmdname" | grep -q "vector" && return 0 ;;
+            esac
+            echo "WARNING: PID $pid is not $name (found: $cmdname) — cleaning up" >&2
         fi
-        # Stale PID file — clean up
         rm -f "$pidfile"
     fi
     return 1
@@ -55,6 +63,13 @@ start_service() {
     "$@" >> "$LOG_DIR/$name.log" 2>&1 &
     local pid=$!
     echo "$pid" > "$PID_DIR/$name.pid"
+    # Verify process didn't immediately crash
+    sleep 0.5
+    if ! kill -0 "$pid" 2>/dev/null; then
+        echo "FAILED (check $LOG_DIR/$name.log)" >&2
+        rm -f "$PID_DIR/$name.pid"
+        return 1
+    fi
     echo "started (PID $pid)"
 }
 

@@ -4,15 +4,10 @@
 from pathlib import Path
 
 from brooklet.consumer import Consumer
-from brooklet.contrib.otel import meter, tracer
+from brooklet.contrib import otel
 from brooklet.envelope import serialize
 from brooklet.registry import Registry
 from brooklet.types import Mode
-
-_events_produced = meter.create_counter(
-    "brooklet.events_produced",
-    description="Total events produced",
-)
 
 
 class Stream:
@@ -60,7 +55,7 @@ class Stream:
             ValueError: If topic name contains path traversal or collides with
                 an external registered source.
         """
-        with tracer.start_as_current_span("produce") as span:
+        with otel.tracer.start_as_current_span("produce") as span:
             span.set_attribute("brooklet.topic", topic)
 
             if not isinstance(event, dict):
@@ -96,7 +91,9 @@ class Stream:
 
             # Auto-register in the unified namespace
             self._registry.register_local(topic, str(data_path))
-            _events_produced.add(1, {"topic": topic})
+            otel.meter.create_counter(
+                "brooklet.events_produced", description="Total events produced"
+            ).add(1, {"topic": topic})
 
     def consume(self, topic: str, group: str, follow: bool = False) -> Consumer:
         """Create a consumer iterator for a registered topic.
@@ -112,19 +109,16 @@ class Stream:
         Raises:
             KeyError: If the topic is not registered.
         """
-        with tracer.start_as_current_span("consume") as span:
-            span.set_attribute("brooklet.topic", topic)
-            span.set_attribute("brooklet.group", group)
-            source = self._registry.get(topic)
-            return Consumer(
-                path=source["path"],
-                mode=source["mode"],
-                group=group,
-                topic=topic,
-                offsets_dir=self._offsets_dir,
-                source=topic,
-                follow=follow,
-            )
+        source = self._registry.get(topic)
+        return Consumer(
+            path=source["path"],
+            mode=source["mode"],
+            group=group,
+            topic=topic,
+            offsets_dir=self._offsets_dir,
+            source=topic,
+            follow=follow,
+        )
 
     def topics(self) -> list[str]:
         """Return names of all registered topics."""

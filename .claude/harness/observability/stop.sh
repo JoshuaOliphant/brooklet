@@ -26,6 +26,15 @@ stop_service() {
         return 0
     fi
 
+    # Verify the PID belongs to the expected binary before killing
+    local cmdname
+    cmdname=$(ps -p "$pid" -o comm= 2>/dev/null || echo "")
+    case "$name" in
+        victoria-logs)    echo "$cmdname" | grep -q "victoria-logs" || { echo "$name: PID $pid is not $name — skipping"; rm -f "$pidfile"; return 0; } ;;
+        victoria-metrics) echo "$cmdname" | grep -q "victoria-metrics" || { echo "$name: PID $pid is not $name — skipping"; rm -f "$pidfile"; return 0; } ;;
+        vector)           echo "$cmdname" | grep -q "vector" || { echo "$name: PID $pid is not $name — skipping"; rm -f "$pidfile"; return 0; } ;;
+    esac
+
     echo -n "$name: stopping (PID $pid)... "
     kill -TERM "$pid" 2>/dev/null || true
 

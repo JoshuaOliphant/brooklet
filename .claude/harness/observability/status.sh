@@ -13,13 +13,27 @@ check_service() {
     if [ -f "$pidfile" ]; then
         pid=$(cat "$pidfile")
         if kill -0 "$pid" 2>/dev/null; then
-            # For services with HTTP health endpoints, use curl; for others just check PID
-            if [ -n "$health_url" ] && curl -sf "$health_url" >/dev/null 2>&1; then
-                status="UP"
-            elif [ -z "$health_url" ]; then
-                status="UP"
+            # Verify the PID belongs to the expected binary
+            local cmdname
+            cmdname=$(ps -p "$pid" -o comm= 2>/dev/null || echo "")
+            local valid_pid=false
+            case "$name" in
+                victoria-logs)    echo "$cmdname" | grep -q "victoria-logs" && valid_pid=true ;;
+                victoria-metrics) echo "$cmdname" | grep -q "victoria-metrics" && valid_pid=true ;;
+                vector)           echo "$cmdname" | grep -q "vector" && valid_pid=true ;;
+            esac
+            if [ "$valid_pid" = true ]; then
+                # For services with HTTP health endpoints, use curl; for others just check PID
+                if [ -n "$health_url" ] && curl -sf "$health_url" >/dev/null 2>&1; then
+                    status="UP"
+                elif [ -z "$health_url" ]; then
+                    status="UP"
+                else
+                    status="PID_ONLY"
+                fi
             else
-                status="PID_ONLY"
+                status="STALE"
+                echo "WARNING: PID $pid is not $name (found: $cmdname)" >&2
             fi
         else
             pid="stale"
