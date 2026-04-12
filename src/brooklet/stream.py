@@ -4,9 +4,15 @@
 from pathlib import Path
 
 from brooklet.consumer import Consumer
+from brooklet.contrib.otel import meter, tracer
 from brooklet.envelope import serialize
 from brooklet.registry import Registry
 from brooklet.types import Mode
+
+_events_produced = meter.create_counter(
+    "brooklet.events_produced",
+    description="Total events produced",
+)
 
 
 class Stream:
@@ -54,39 +60,43 @@ class Stream:
             ValueError: If topic name contains path traversal or collides with
                 an external registered source.
         """
-        if not isinstance(event, dict):
-            msg = f"event must be a dict, got {type(event).__name__}"
-            raise TypeError(msg)
+        with tracer.start_as_current_span("produce") as span:
+            span.set_attribute("brooklet.topic", topic)
 
-        # Reject path traversal
-        if ".." in Path(topic).parts:
-            msg = f"topic name must not contain path traversal (got {topic!r})"
-            raise ValueError(msg)
+            if not isinstance(event, dict):
+                msg = f"event must be a dict, got {type(event).__name__}"
+                raise TypeError(msg)
 
-        # Check namespace collision with external sources
-        if self._registry.is_external(topic):
-            msg = f"topic {topic!r} is already registered as an external source"
-            raise ValueError(msg)
+            # Reject path traversal
+            if ".." in Path(topic).parts:
+                msg = f"topic name must not contain path traversal (got {topic!r})"
+                raise ValueError(msg)
 
-        # Create topic directory and data file path
-        topic_dir = self._path / topic
-        topic_dir.mkdir(parents=True, exist_ok=True)
-        data_path = topic_dir / "data.jsonl"
+            # Check namespace collision with external sources
+            if self._registry.is_external(topic):
+                msg = f"topic {topic!r} is already registered as an external source"
+                raise ValueError(msg)
 
-        # Determine next sequence number from existing line count
-        next_seq = 0
-        if data_path.exists():
-            with open(data_path) as f:
-                next_seq = sum(1 for _ in f)
-        next_seq += 1
+            # Create topic directory and data file path
+            topic_dir = self._path / topic
+            topic_dir.mkdir(parents=True, exist_ok=True)
+            data_path = topic_dir / "data.jsonl"
 
-        # Serialize with envelope and append
-        line = serialize(dict(event), seq=next_seq, source=source)
-        with open(data_path, "a") as f:
-            f.write(line)
+            # Determine next sequence number from existing line count
+            next_seq = 0
+            if data_path.exists():
+                with open(data_path) as f:
+                    next_seq = sum(1 for _ in f)
+            next_seq += 1
 
-        # Auto-register in the unified namespace
-        self._registry.register_local(topic, str(data_path))
+            # Serialize with envelope and append
+            line = serialize(dict(event), seq=next_seq, source=source)
+            with open(data_path, "a") as f:
+                f.write(line)
+
+            # Auto-register in the unified namespace
+            self._registry.register_local(topic, str(data_path))
+            _events_produced.add(1, {"topic": topic})
 
     def consume(self, topic: str, group: str, follow: bool = False) -> Consumer:
         """Create a consumer iterator for a registered topic.
@@ -102,16 +112,19 @@ class Stream:
         Raises:
             KeyError: If the topic is not registered.
         """
-        source = self._registry.get(topic)
-        return Consumer(
-            path=source["path"],
-            mode=source["mode"],
-            group=group,
-            topic=topic,
-            offsets_dir=self._offsets_dir,
-            source=topic,
-            follow=follow,
-        )
+        with tracer.start_as_current_span("consume") as span:
+            span.set_attribute("brooklet.topic", topic)
+            span.set_attribute("brooklet.group", group)
+            source = self._registry.get(topic)
+            return Consumer(
+                path=source["path"],
+                mode=source["mode"],
+                group=group,
+                topic=topic,
+                offsets_dir=self._offsets_dir,
+                source=topic,
+                follow=follow,
+            )
 
     def topics(self) -> list[str]:
         """Return names of all registered topics."""

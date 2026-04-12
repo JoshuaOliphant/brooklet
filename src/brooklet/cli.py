@@ -14,6 +14,7 @@ import pluggy
 import typer
 
 import brooklet
+from brooklet.contrib.otel import tracer
 from brooklet.plugins import get_plugin_manager
 from brooklet.types import Event, Mode
 from brooklet.watch_format import format_event
@@ -277,4 +278,5 @@ _load_plugins()
 
 def main() -> None:
     """CLI entry point for the `brooklet` command."""
-    app()
+    with tracer.start_as_current_span("brooklet-cli"):
+        app()

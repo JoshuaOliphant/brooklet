@@ -96,3 +96,8 @@ dev = [
     "ruff>=0.9",
     "pytest-reportlog>=1.0.0",
 ]
+otel = [
+    "opentelemetry-api>=1.28",
+    "opentelemetry-sdk>=1.28",
+    "opentelemetry-exporter-otlp-proto-http>=1.28",
+]

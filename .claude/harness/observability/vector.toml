@@ -1,0 +1,84 @@
+# Vector pipeline configuration for brooklet observability stack.
+# Receives OTLP telemetry and routes to VictoriaLogs, VictoriaMetrics, and JSONL files.
+# NOTE: JSONL file sink paths are relative to the working directory set by start.sh.
+
+# --- Global ---
+
+data_dir = "data/vector"
+
+# --- Sources ---
+
+[sources.otlp]
+type = "opentelemetry"
+
+[sources.otlp.grpc]
+address = "127.0.0.1:4317"
+
+[sources.otlp.http]
+address = "127.0.0.1:4318"
+
+# --- Transforms ---
+
+# Reshape logs for VictoriaLogs' /insert/jsonline endpoint.
+# VictoriaLogs auto-detects _time and _msg fields for indexing.
+[transforms.reshape_logs]
+type = "remap"
+inputs = ["otlp.logs"]
+source = '''
+._time = del(.timestamp)
+._msg = del(.message)
+._stream = "brooklet"
+'''
+
+# Reshape traces as structured log lines for VictoriaLogs ingestion.
+[transforms.reshape_traces]
+type = "remap"
+inputs = ["otlp.traces"]
+source = '''
+._time = del(.start_timestamp)
+._msg = del(.name)
+._stream = "brooklet-traces"
+'''
+
+# --- Sinks: VictoriaLogs ---
+
+[sinks.victoria_logs]
+type = "http"
+inputs = ["reshape_logs"]
+uri = "http://127.0.0.1:9428/insert/jsonline"
+encoding.codec = "json"
+framing.method = "newline_delimited"
+
+[sinks.traces_to_vlogs]
+type = "http"
+inputs = ["reshape_traces"]
+uri = "http://127.0.0.1:9428/insert/jsonline"
+encoding.codec = "json"
+framing.method = "newline_delimited"
+
+# --- Sinks: VictoriaMetrics ---
+
+[sinks.victoria_metrics]
+type = "prometheus_remote_write"
+inputs = ["otlp.metrics"]
+endpoint = "http://127.0.0.1:8428/api/v1/write"
+
+# --- Sinks: JSONL files (brooklet dog-food) ---
+
+[sinks.logs_jsonl]
+type = "file"
+inputs = ["otlp.logs"]
+path = "data/jsonl/logs/%Y-%m-%d.jsonl"
+encoding.codec = "json"
+
+[sinks.metrics_jsonl]
+type = "file"
+inputs = ["otlp.metrics"]
+path = "data/jsonl/metrics/%Y-%m-%d.jsonl"
+encoding.codec = "json"
+
+[sinks.traces_jsonl]
+type = "file"
+inputs = ["otlp.traces"]
+path = "data/jsonl/traces/%Y-%m-%d.jsonl"
+encoding.codec = "json"
