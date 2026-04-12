@@ -49,12 +49,20 @@ uri = "http://127.0.0.1:9428/insert/jsonline"
 encoding.codec = "json"
 framing.method = "newline_delimited"
 
+[sinks.victoria_logs.buffer]
+max_size = 104857600  # 100MB — drop newest if VictoriaLogs is down
+when_full = "drop_newest"
+
 [sinks.traces_to_vlogs]
 type = "http"
 inputs = ["reshape_traces"]
 uri = "http://127.0.0.1:9428/insert/jsonline"
 encoding.codec = "json"
 framing.method = "newline_delimited"
+
+[sinks.traces_to_vlogs.buffer]
+max_size = 104857600
+when_full = "drop_newest"
 
 # --- Sinks: VictoriaMetrics ---
 
@@ -63,7 +71,12 @@ type = "prometheus_remote_write"
 inputs = ["otlp.metrics"]
 endpoint = "http://127.0.0.1:8428/api/v1/write"
 
+[sinks.victoria_metrics.buffer]
+max_size = 52428800  # 50MB
+when_full = "drop_newest"
+
 # --- Sinks: JSONL files (brooklet dog-food) ---
+# Rotation: start.sh deletes files older than 3 days on every startup.
 
 [sinks.logs_jsonl]
 type = "file"

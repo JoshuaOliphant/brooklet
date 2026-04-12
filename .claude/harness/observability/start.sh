@@ -12,6 +12,12 @@ DATA_DIR="$SCRIPT_DIR/data"
 
 mkdir -p "$PID_DIR" "$LOG_DIR" "$DATA_DIR/victoria-logs" "$DATA_DIR/victoria-metrics" "$DATA_DIR/vector" "$DATA_DIR/jsonl"
 
+# --- Housekeeping: prune old data on every startup ---
+# JSONL files older than 3 days
+find "$DATA_DIR/jsonl" -name "*.jsonl" -mtime +3 -delete 2>/dev/null || true
+# Truncate service logs over 10MB
+find "$LOG_DIR" -name "*.log" -size +10M -exec truncate -s 0 {} \; 2>/dev/null || true
+
 # Check if binaries are installed
 if [ ! -f "$BIN_DIR/victoria-logs-prod" ] || [ ! -f "$BIN_DIR/victoria-metrics-prod" ] || [ ! -f "$BIN_DIR/vector" ]; then
     echo "Binaries not found. Running install.sh..."
@@ -77,13 +83,15 @@ start_service() {
 start_service victoria-logs \
     "$BIN_DIR/victoria-logs-prod" \
     -storageDataPath="$DATA_DIR/victoria-logs" \
-    -httpListenAddr=:9428
+    -httpListenAddr=:9428 \
+    -retentionPeriod=7d
 
 # --- Start VictoriaMetrics ---
 start_service victoria-metrics \
     "$BIN_DIR/victoria-metrics-prod" \
     -storageDataPath="$DATA_DIR/victoria-metrics" \
-    -httpListenAddr=:8428
+    -httpListenAddr=:8428 \
+    -retentionPeriod=7d
 
 # --- Wait for backends before starting Vector ---
 wait_for_health "VictoriaLogs" "http://127.0.0.1:9428/health"
