@@ -3,14 +3,25 @@
   "permissions": {
     "defaultMode": "acceptEdits",
     "allow": [
-      "Bash(uv *)",
       "Bash(git *)",
+      "Bash(uv *)",
       "Bash(ruff *)",
       "Bash(pytest *)",
+      "Bash(chmod *)",
       "Bash(ls *)",
       "Bash(cd *)",
+      "Bash(bash *)",
+      "Bash(curl *)",
       "Bash(gh *)",
       "Bash(ty *)",
+      "Bash(mkdir *)",
+      "Read",
+      "Write",
+      "Edit",
+      "Glob",
+      "Grep",
+      "Agent",
+      "TodoWrite",
       "mcp__github__*"
     ],
     "deny": [
@@ -27,6 +38,12 @@
             "command": "cd \"$CLAUDE_PROJECT_DIR\" && { uv sync --locked --quiet 2>&1 || echo 'WARNING: uv sync failed, proceeding with existing env'; } && echo '--- Baseline Test Run ---' && bash -c 'set -o pipefail; uv run pytest -x -q --tb=line 2>&1 | tail -8'",
             "timeout": 120,
             "statusMessage": "Syncing deps and verifying baseline..."
+          },
+          {
+            "type": "command",
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" && bash .claude/harness/observability/start.sh 2>&1 | tail -5",
+            "timeout": 30,
+            "statusMessage": "Starting observability stack..."
           }
         ]
       }

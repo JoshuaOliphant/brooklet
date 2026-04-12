@@ -26,3 +26,9 @@ reports/
 # Claude Code local settings (not shared)
 .claude/settings.local.json
 CLAUDE.local.md
+
+# Observability harness runtime data
+.claude/harness/observability/bin/
+.claude/harness/observability/pids/
+.claude/harness/observability/logs/
+.claude/harness/observability/data/

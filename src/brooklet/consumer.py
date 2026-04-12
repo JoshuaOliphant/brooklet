@@ -10,6 +10,7 @@ import warnings
 from collections.abc import Iterator
 from pathlib import Path
 
+from brooklet.contrib import otel
 from brooklet.envelope import wrap
 from brooklet.offsets import load, save
 from brooklet.types import Event, GlobOffset, Mode, SingleFileOffset
@@ -173,14 +174,26 @@ class Consumer:
 
         Uses readline() instead of iteration to keep tell() available.
         """
-        while True:
-            line = f.readline()
-            if not line:
-                break
-            self._seq += 1
-            event = wrap(line, seq=self._seq, source=self._source)
-            if event is not None:
-                yield event
+        count = 0
+        try:
+            while True:
+                line = f.readline()
+                if not line:
+                    break
+                self._seq += 1
+                event = wrap(line, seq=self._seq, source=self._source)
+                if event is not None:
+                    count += 1
+                    yield event
+        finally:
+            if count:
+                attrs = {"topic": self._topic}
+                otel.meter.create_counter(
+                    "brooklet.events_consumed", description="Total events consumed"
+                ).add(count, attrs)
+                otel.meter.create_histogram(
+                    "brooklet.batch_size", description="Events per read_lines batch"
+                ).record(count, attrs)
 
     def _catch_up_glob(self, files: list[str]) -> Iterator[Event]:
         """Read all unread events from glob-matched files, updating offset.
