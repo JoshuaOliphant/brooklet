@@ -77,17 +77,15 @@ download_vector() {
     fi
     echo "Downloading Vector ${VECTOR_VERSION}..."
 
-    # Vector uses different naming per platform
-    local vector_arch="$RAW_ARCH"  # Vector uses raw arch names (x86_64, aarch64)
-    if [ "$RAW_ARCH" = "arm64" ]; then
-        vector_arch="aarch64"
-    fi
-
+    # Vector uses different arch naming per platform
     local vector_target
-    case "$OS" in
-        darwin) vector_target="${vector_arch}-apple-darwin" ;;
-        linux)  vector_target="${vector_arch}-unknown-linux-gnu" ;;
-        *)      echo "ERROR: Unsupported OS for Vector: $OS" >&2; return 1 ;;
+    case "${OS}-${RAW_ARCH}" in
+        darwin-arm64)   vector_target="arm64-apple-darwin" ;;
+        darwin-x86_64)  vector_target="x86_64-apple-darwin" ;;
+        linux-x86_64)   vector_target="x86_64-unknown-linux-gnu" ;;
+        linux-aarch64)  vector_target="aarch64-unknown-linux-gnu" ;;
+        linux-arm64)    vector_target="aarch64-unknown-linux-gnu" ;;
+        *)              echo "ERROR: Unsupported platform for Vector: ${OS}-${RAW_ARCH}" >&2; return 1 ;;
     esac
 
     local url="https://github.com/vectordotdev/vector/releases/download/${VECTOR_VERSION}/vector-${VECTOR_VERSION#v}-${vector_target}.tar.gz"
