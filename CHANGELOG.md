@@ -2,6 +2,23 @@
 
 All notable changes to brooklet are documented here.
 
+## [0.5.0] - 2026-04-12
+
+### Features
+
+- Add optional OpenTelemetry instrumentation with zero-cost no-op fallback (#9)
+- Add local observability harness (Vector + VictoriaLogs + VictoriaMetrics)
+- Add agent-facing rules with LogsQL/PromQL query examples and Monitor integration
+- Add JSONL telemetry export for dog-fooding with brooklet
+
+### Bug Fixes
+
+- Fix install.sh platform detection (darwin/linux + amd64/arm64)
+- Fix stale-binding bug: use module-attribute access for OTel handles
+- Fix generator metrics lost on early consumer stop (try/finally)
+- Fix PID identity validation in observability stack scripts
+- Remove misleading consume() span that closed before iteration
+
 ## [0.4.0] - 2026-04-11
 
 ### Bug Fixes
