@@ -9,6 +9,8 @@
       "Bash(pytest *)",
       "Bash(ls *)",
       "Bash(cd *)",
+      "Bash(gh *)",
+      "Bash(ty *)",
       "mcp__github__*"
     ],
     "deny": [
