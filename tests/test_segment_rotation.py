@@ -84,7 +84,7 @@ class TestSegmentRotation:
             name = Path(seg).name
             assert name.startswith("data-") and name.endswith(".jsonl")
             num = int(name[5:9])
-            assert 1 <= num
+            assert num >= 1
 
 
 class TestSidecar:

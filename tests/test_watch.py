@@ -265,10 +265,10 @@ def test_watch_saves_offset_on_sigterm(tmp_path):
     # would pass `> 0` but still break resumability on restart.
     # Offsets use GlobOffset encoding: segment_number * 10**18 + byte_offset.
     # Decode to get the active segment number and byte position within it.
-    _SCALE = 10**18
+    scale = 10**18
     raw_offset = data["offset"]
-    seg_num = raw_offset // _SCALE
-    byte_offset = raw_offset % _SCALE
+    seg_num = raw_offset // scale
+    byte_offset = raw_offset % scale
     segments = sorted((tmp_path / "sigterm").glob("data-*.jsonl"))
     assert segments, "Expected at least one segment file"
     active_seg = segments[seg_num - 1] if seg_num > 0 else segments[0]
