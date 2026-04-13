@@ -76,3 +76,4 @@
 {"actor":"Joshua Oliphant","comment":null,"created_at":"2026-04-12T08:39:09Z","event_type":"created","id":76,"issue_id":"brooklet-3sb","new_value":"","old_value":""}
 {"actor":"Joshua Oliphant","comment":null,"created_at":"2026-04-12T09:21:10Z","event_type":"created","id":77,"issue_id":"brooklet-gj5","new_value":"","old_value":""}
 {"actor":"Joshua Oliphant","comment":null,"created_at":"2026-04-12T20:50:26Z","event_type":"closed","id":78,"issue_id":"brooklet-vi7","new_value":"DEC-014 written and spec created at docs/superpowers/specs/2026-04-12-segment-rotation-design.md","old_value":""}
+{"actor":"Joshua Oliphant","comment":null,"created_at":"2026-04-13T07:56:28Z","event_type":"closed","id":79,"issue_id":"brooklet-vi7","new_value":"Segment rotation implemented: produce() now writes to data-NNNN.jsonl segments with flock, sidecar cache, consumer binary search, and legacy migration. 311 tests pass.","old_value":""}
