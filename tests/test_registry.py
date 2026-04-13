@@ -82,3 +82,48 @@ class TestRegistry:
 
         with pytest.raises(ValueError, match="Corrupt"):
             Registry(brooklet_dir)
+
+
+class TestRegistryLocalGlob:
+    def test_register_local_stores_glob_pattern(self, brooklet_dir):
+        """register_local with mode='glob' stores the entry with mode 'glob'."""
+        reg = Registry(brooklet_dir)
+        reg.register_local("events", "/tmp/streams/events/data-*.jsonl", mode="glob")
+
+        source = reg.get("events")
+        assert source["path"] == "/tmp/streams/events/data-*.jsonl"
+        assert source["mode"] == "glob"
+
+    def test_register_local_default_mode_is_single_file(self, brooklet_dir):
+        """register_local without mode defaults to 'single-file' for backward compat."""
+        reg = Registry(brooklet_dir)
+        reg.register_local("events", "/tmp/streams/events/data.jsonl")
+
+        source = reg.get("events")
+        assert source["mode"] == "single-file"
+
+    def test_register_local_idempotent_with_glob(self, brooklet_dir):
+        """Calling register_local twice with same name+path+mode='glob' does not error."""
+        reg = Registry(brooklet_dir)
+        reg.register_local("logs", "/tmp/logs/data-*.jsonl", mode="glob")
+        reg.register_local("logs", "/tmp/logs/data-*.jsonl", mode="glob")  # no error
+
+        source = reg.get("logs")
+        assert source["mode"] == "glob"
+
+    def test_register_local_rejects_mode_change(self, brooklet_dir):
+        """Changing mode on an already-registered local topic raises ValueError."""
+        reg = Registry(brooklet_dir)
+        reg.register_local("events", "/tmp/streams/events/data.jsonl", mode="single-file")
+
+        with pytest.raises(ValueError):
+            reg.register_local("events", "/tmp/streams/events/data-*.jsonl", mode="glob")
+
+    def test_get_returns_correct_mode_for_local_glob(self, brooklet_dir):
+        """After registering with glob mode, get() returns the correct mode."""
+        reg = Registry(brooklet_dir)
+        reg.register_local("metrics", "/tmp/metrics/data-*.jsonl", mode="glob")
+
+        source = reg.get("metrics")
+        assert source["path"] == "/tmp/metrics/data-*.jsonl"
+        assert source["mode"] == "glob"

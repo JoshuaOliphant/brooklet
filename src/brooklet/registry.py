@@ -93,15 +93,18 @@ class Registry:
         self._sources[name] = SourceDef(path=path, mode=mode)
         self._save()
 
-    def register_local(self, name: str, path: str) -> None:
+    def register_local(self, name: str, path: str, mode: Mode = "single-file") -> None:
         """Register a locally-produced topic. Called by produce() on first write."""
         if name in self._sources:
             existing = self._sources[name]
-            if existing.get("type") != "local" or existing["path"] != path:
-                msg = f"topic {name!r} is already registered as an external source"
+            same_local = existing.get("type") == "local"
+            same_path = existing["path"] == path
+            same_mode = existing.get("mode") == mode
+            if not same_local or not same_path or not same_mode:
+                msg = f"topic {name!r} is already registered with different path or mode"
                 raise ValueError(msg)
-            return  # Already registered as local with same path, idempotent
-        self._sources[name] = {"path": path, "mode": "single-file", "type": "local"}
+            return  # Already registered as local with same path and mode, idempotent
+        self._sources[name] = {"path": path, "mode": mode, "type": "local"}
         self._save()
 
     def is_external(self, name: str) -> bool:
