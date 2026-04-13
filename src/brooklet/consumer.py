@@ -204,38 +204,38 @@ class Consumer:
         assert isinstance(self._offset, GlobOffset)
 
         if not files:
-            if self._offset.file_index != 0 or self._offset.byte_offset != 0:
+            if self._offset.segment_number != 0 or self._offset.byte_offset != 0:
                 logger.error(
                     "Glob matched no files but offset is non-zero "
-                    "(file_index=%d, byte_offset=%d). "
+                    "(segment_number=%d, byte_offset=%d). "
                     "Resetting offset (topic=%s, group=%s).",
-                    self._offset.file_index,
+                    self._offset.segment_number,
                     self._offset.byte_offset,
                     self._topic,
                     self._group,
                 )
-                self._offset = GlobOffset(file_index=0, byte_offset=0)
+                self._offset = GlobOffset(segment_number=0, byte_offset=0)
             return
 
-        start_file_index = self._offset.file_index
+        start_segment_index = self._offset.segment_number
         start_byte_offset = self._offset.byte_offset
 
-        if start_file_index >= len(files):
+        if start_segment_index >= len(files):
             logger.error(
-                "Saved file_index %d is out of bounds (only %d files matched). "
+                "Saved segment_number %d is out of bounds (only %d files matched). "
                 "Files may have been added or removed between sessions. "
                 "Resetting to start of all files (topic=%s, group=%s).",
-                start_file_index,
+                start_segment_index,
                 len(files),
                 self._topic,
                 self._group,
             )
-            start_file_index = 0
+            start_segment_index = 0
             start_byte_offset = 0
-            self._offset = GlobOffset(file_index=0, byte_offset=0)
+            self._offset = GlobOffset(segment_number=0, byte_offset=0)
 
         for i, filepath in enumerate(files):
-            if i < start_file_index:
+            if i < start_segment_index:
                 # Still record position for follow mode
                 if self._follow:
                     try:
@@ -262,13 +262,13 @@ class Consumer:
                 )
                 # Advance offset past this file
                 if i == len(files) - 1:
-                    self._offset = GlobOffset(file_index=i, byte_offset=0)
+                    self._offset = GlobOffset(segment_number=i, byte_offset=0)
                 else:
-                    self._offset = GlobOffset(file_index=i + 1, byte_offset=0)
+                    self._offset = GlobOffset(segment_number=i + 1, byte_offset=0)
                 continue
 
             try:
-                if i == start_file_index:
+                if i == start_segment_index:
                     f.seek(start_byte_offset)
 
                 # Track active file so the batch finally block can capture
@@ -286,9 +286,9 @@ class Consumer:
 
                 # After reading this file, update offset to next file
                 if i == len(files) - 1:
-                    self._offset = GlobOffset(file_index=i, byte_offset=end_pos)
+                    self._offset = GlobOffset(segment_number=i, byte_offset=end_pos)
                 else:
-                    self._offset = GlobOffset(file_index=i + 1, byte_offset=0)
+                    self._offset = GlobOffset(segment_number=i + 1, byte_offset=0)
                 # Normal path: release the active-file tracker so the
                 # finally below leaves self._offset at the advanced value.
                 self._glob_active_file = None
@@ -300,7 +300,7 @@ class Consumer:
                 # we leave self._offset at its advanced value.
                 if self._glob_active_file is f:
                     with contextlib.suppress(OSError, ValueError):
-                        self._offset = GlobOffset(file_index=i, byte_offset=f.tell())
+                        self._offset = GlobOffset(segment_number=i, byte_offset=f.tell())
                     self._glob_active_file = None
                 f.close()
 
@@ -410,7 +410,7 @@ class Consumer:
                     all_files = sorted(self._file_positions.keys())
                     file_idx = all_files.index(filepath)
                     self._offset = GlobOffset(
-                        file_index=file_idx,
+                        segment_number=file_idx,
                         byte_offset=self._file_positions[filepath],
                     )
 
@@ -469,7 +469,7 @@ class Consumer:
             if self._file_handle is not None and not self._file_handle.closed:
                 if isinstance(self._offset, GlobOffset):
                     self._offset = GlobOffset(
-                        file_index=self._offset.file_index,
+                        segment_number=self._offset.segment_number,
                         byte_offset=self._file_handle.tell(),
                     )
                 else:

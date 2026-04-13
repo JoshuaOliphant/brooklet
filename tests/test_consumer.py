@@ -305,8 +305,8 @@ class TestConsumerBatch:
         # Observer is None for batch mode, so close should just work
         consumer.close()
 
-    def test_glob_file_index_out_of_bounds_resets(self, tmp_path, offsets_dir, caplog):
-        """Stale file_index beyond file count resets to 0 with error."""
+    def test_glob_segment_number_out_of_bounds_resets(self, tmp_path, offsets_dir, caplog):
+        """Stale segment_number beyond file count resets to 0 with error."""
         from brooklet.offsets import load, save
         from brooklet.types import GlobOffset
 
@@ -317,8 +317,8 @@ class TestConsumerBatch:
             with open(dir_ / name, "w") as f:
                 f.write(json.dumps(event) + "\n")
 
-        # Save offset pointing to file_index=5 (way beyond 2 files)
-        stale = GlobOffset(file_index=5, byte_offset=0)
+        # Save offset pointing to segment_number=5 (way beyond 2 files)
+        stale = GlobOffset(segment_number=5, byte_offset=0)
         save(offsets_dir, "test", "stale-idx", stale.encode())
 
         consumer = Consumer(
@@ -339,14 +339,14 @@ class TestConsumerBatch:
         # Verify error-level log fired
         error_records = [r for r in caplog.records if r.levelno >= logging.ERROR]
         assert any(
-            "file_index" in r.message.lower() or "out of bounds" in r.message.lower()
+            "segment_number" in r.message.lower() or "out of bounds" in r.message.lower()
             for r in error_records
         )
 
         # Verify persisted offset reflects consumption of both files
         raw = load(offsets_dir, "test", "stale-idx")
         persisted = GlobOffset.decode(raw)
-        assert persisted.file_index == 1
+        assert persisted.segment_number == 1
         assert persisted.byte_offset > 0
 
     def test_glob_file_removed_between_sessions(self, tmp_path, offsets_dir, caplog):
@@ -365,8 +365,8 @@ class TestConsumerBatch:
             with open(dir_ / name, "w") as f:
                 f.write(json.dumps(event) + "\n")
 
-        # Simulate having consumed up through file_index=2 (c.jsonl) with some byte offset
-        stale = GlobOffset(file_index=2, byte_offset=100)
+        # Simulate having consumed up through segment_number=2 (c.jsonl) with some byte offset
+        stale = GlobOffset(segment_number=2, byte_offset=100)
         save(offsets_dir, "test", "removed", stale.encode())
 
         # Now remove a.jsonl — only 2 files remain but saved index is 2
@@ -382,7 +382,7 @@ class TestConsumerBatch:
         with caplog.at_level(logging.ERROR, logger="brooklet"):
             events = list(consumer)
 
-        # file_index=2 is out of bounds for 2 files, should reset and re-read
+        # segment_number=2 is out of bounds for 2 files, should reset and re-read
         assert len(events) == 2
         assert events[0]["type"] == "b"
         assert events[1]["type"] == "c"
@@ -390,14 +390,14 @@ class TestConsumerBatch:
         # Verify error-level log fired
         error_records = [r for r in caplog.records if r.levelno >= logging.ERROR]
         assert any(
-            "file_index" in r.message.lower() or "out of bounds" in r.message.lower()
+            "segment_number" in r.message.lower() or "out of bounds" in r.message.lower()
             for r in error_records
         )
 
         # Verify persisted offset reflects consumption of remaining files
         raw = load(offsets_dir, "test", "removed")
         persisted = GlobOffset.decode(raw)
-        assert persisted.file_index == 1
+        assert persisted.segment_number == 1
         assert persisted.byte_offset > 0
 
     def test_glob_empty_files_with_stale_offset_resets(self, tmp_path, offsets_dir, caplog):
@@ -408,8 +408,8 @@ class TestConsumerBatch:
         dir_ = tmp_path / "empty_glob"
         dir_.mkdir()
 
-        # Save a stale offset pointing to file_index=3
-        stale = GlobOffset(file_index=3, byte_offset=42)
+        # Save a stale offset pointing to segment_number=3
+        stale = GlobOffset(segment_number=3, byte_offset=42)
         save(offsets_dir, "test", "empty-stale", stale.encode())
 
         consumer = Consumer(
@@ -435,11 +435,11 @@ class TestConsumerBatch:
         # Verify persisted offset is reset to 0
         raw = load(offsets_dir, "test", "empty-stale")
         persisted = GlobOffset.decode(raw)
-        assert persisted.file_index == 0
+        assert persisted.segment_number == 0
         assert persisted.byte_offset == 0
 
     def test_glob_follow_with_stale_index_resets(self, tmp_path, offsets_dir, caplog):
-        """Stale file_index in follow mode resets and reads all files."""
+        """Stale segment_number in follow mode resets and reads all files."""
         import threading
         import time
 
@@ -455,7 +455,7 @@ class TestConsumerBatch:
                 f.write(json.dumps(event) + "\n")
 
         # Save stale offset beyond file count
-        stale = GlobOffset(file_index=5, byte_offset=0)
+        stale = GlobOffset(segment_number=5, byte_offset=0)
         save(offsets_dir, "test", "follow-stale", stale.encode())
 
         consumer = Consumer(
@@ -499,7 +499,7 @@ class TestConsumerBatch:
         # Verify error-level reset log fired
         error_records = [r for r in caplog.records if r.levelno >= logging.ERROR]
         assert any(
-            "file_index" in r.message.lower() or "out of bounds" in r.message.lower()
+            "segment_number" in r.message.lower() or "out of bounds" in r.message.lower()
             for r in error_records
         )
 
@@ -545,7 +545,7 @@ class TestConsumerOffsetSaveDurability:
         raw = load(offsets_dir, "test", "glob-interrupt")
         assert raw > 0
         persisted = GlobOffset.decode(raw)
-        assert persisted.byte_offset > 0 or persisted.file_index > 0
+        assert persisted.byte_offset > 0 or persisted.segment_number > 0
 
     def test_glob_batch_saves_offset_without_explicit_close(self, tmp_path, offsets_dir):
         """Exhausting a glob batch iterator must save the offset via finally,
@@ -576,7 +576,7 @@ class TestConsumerOffsetSaveDurability:
 
         raw = load(offsets_dir, "test", "glob-exhaust")
         persisted = GlobOffset.decode(raw)
-        assert persisted.file_index == 1
+        assert persisted.segment_number == 1
         assert persisted.byte_offset > 0
 
     def test_single_file_batch_saves_offset_without_explicit_close(self, sample_jsonl, offsets_dir):
