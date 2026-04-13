@@ -50,6 +50,10 @@ class GlobOffset:
 
     Encodes segment_number and byte_offset into a single integer using
     segment_number * 10**18 + byte_offset for storage.
+
+    For local topics, segment_number is the numeric value parsed from
+    data-NNNN.jsonl filenames. For external glob sources that don't follow
+    that naming convention, segment_number is a positional file index.
     """
 
     segment_number: int = 0
