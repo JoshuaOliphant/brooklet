@@ -24,15 +24,28 @@ bash .claude/harness/observability/install.sh
 
 ### Querying Logs (VictoriaLogs — LogsQL)
 
+NOTE: LogsQL stream filters use brace syntax: `_stream:{field="value"}`.
+OTel metric names use dots (e.g., `brooklet.events_produced`), so PromQL
+queries need `--data-urlencode` or brace matching to handle special chars.
+
 ```bash
-# Recent logs
+# Recent logs (all streams)
 curl -s 'http://127.0.0.1:9428/select/logsql/query?query=*&limit=10' | jq .
 
-# Filter by stream
-curl -s 'http://127.0.0.1:9428/select/logsql/query?query=_stream:brooklet&limit=20' | jq .
+# Filter by stream (brace syntax required)
+curl -s 'http://127.0.0.1:9428/select/logsql/query' \
+  --data-urlencode 'query=_stream:{_stream="brooklet"}' \
+  --data-urlencode 'limit=20' | jq .
+
+# Traces (stored as structured log lines)
+curl -s 'http://127.0.0.1:9428/select/logsql/query' \
+  --data-urlencode 'query=_stream:{_stream="brooklet-traces"}' \
+  --data-urlencode 'limit=10' | jq .
 
 # Search by message content
-curl -s 'http://127.0.0.1:9428/select/logsql/query?query=_msg:error&limit=10' | jq .
+curl -s 'http://127.0.0.1:9428/select/logsql/query' \
+  --data-urlencode 'query=_msg:error' \
+  --data-urlencode 'limit=10' | jq .
 
 # Time-bounded query (last 5 minutes)
 curl -s 'http://127.0.0.1:9428/select/logsql/query?query=*&start=5m&limit=50' | jq .
@@ -40,17 +53,26 @@ curl -s 'http://127.0.0.1:9428/select/logsql/query?query=*&start=5m&limit=50' | 
 
 ### Querying Metrics (VictoriaMetrics — PromQL)
 
+NOTE: OTel metric names use dots. Use `--data-urlencode` for reliable queries.
+
 ```bash
-# Events produced total
-curl -s 'http://127.0.0.1:8428/api/v1/query?query=brooklet_events_produced_total' | jq .
+# Events produced (per topic)
+curl -s 'http://127.0.0.1:8428/api/v1/query' \
+  --data-urlencode 'query={__name__="brooklet.events_produced"}' | jq .
 
-# Events consumed total
-curl -s 'http://127.0.0.1:8428/api/v1/query?query=brooklet_events_consumed_total' | jq .
+# Events consumed (per topic)
+curl -s 'http://127.0.0.1:8428/api/v1/query' \
+  --data-urlencode 'query={__name__="brooklet.events_consumed"}' | jq .
 
-# Batch size histogram
-curl -s 'http://127.0.0.1:8428/api/v1/query?query=brooklet_batch_size_bucket' | jq .
+# Batch size histogram (sum shows total events per batch)
+curl -s 'http://127.0.0.1:8428/api/v1/query' \
+  --data-urlencode 'query={__name__="brooklet.batch_size_sum"}' | jq .
 
-# All available metrics
+# All brooklet metrics
+curl -s 'http://127.0.0.1:8428/api/v1/query' \
+  --data-urlencode 'query={__name__=~"brooklet.*"}' | jq '.data.result[] | {name: .metric.__name__, topic: .metric.topic, value: .value[1]}'
+
+# All available metric names
 curl -s 'http://127.0.0.1:8428/api/v1/label/__name__/values' | jq .
 ```
 
@@ -88,18 +110,18 @@ bash -c 'while true; do curl -s "http://127.0.0.1:9428/select/logsql/query?query
 # Then use the Monitor tool on the background process to stream events
 
 # Watch a specific metric change during test runs
-bash -c 'while true; do val=$(curl -s "http://127.0.0.1:8428/api/v1/query?query=brooklet_events_consumed_total" 2>/dev/null | jq -r ".data.result[0].value[1] // \"0\"" 2>/dev/null); echo "events_consumed=$val"; sleep 2; done' &
+bash -c 'while true; do val=$(curl -s "http://127.0.0.1:8428/api/v1/query" --data-urlencode "query={__name__=\"brooklet.events_consumed\"}" 2>/dev/null | jq -r ".data.result[0].value[1] // \"0\"" 2>/dev/null); echo "events_consumed=$val"; sleep 2; done' &
 ```
 
 ### When to Query (Workflow Guidance)
 
 | Scenario | What to check |
 |----------|--------------|
-| **Debugging follow-mode** | `brooklet_events_consumed_total` — are events being read? Then check VictoriaLogs for warnings |
-| **After running tests** | Query `_stream:brooklet` logs to see if instrumented code paths fired |
-| **Performance work** | `rate(brooklet_events_produced_total[5m])` for throughput during benchmarks |
-| **Verifying a logging fix** | Query VictoriaLogs after reproducing the bug to confirm the warning/error appears |
-| **Investigating consumer lag** | Compare `brooklet_events_produced_total` vs `brooklet_events_consumed_total` per topic |
+| **Debugging follow-mode** | `{__name__="brooklet.events_consumed"}` — are events being read? Then check VictoriaLogs for warnings |
+| **After running tests** | Query `_stream:{_stream="brooklet"}` logs to see if instrumented code paths fired |
+| **Performance work** | `rate({__name__="brooklet.events_produced"}[5m])` for throughput during benchmarks |
+| **Verifying a logging fix** | Query VictoriaLogs `_msg:OSError` after reproducing the bug to confirm the warning appears |
+| **Investigating consumer lag** | Compare `brooklet.events_produced` vs `brooklet.events_consumed` per topic |
 
 ### Ports
 
