@@ -44,21 +44,25 @@ class SingleFileOffset:
 class GlobOffset:
     """Offset state for a glob-pattern consumer.
 
-    Encodes file_index and byte_offset into a single integer using
-    file_index * 10**18 + byte_offset for storage.
+    Encodes segment_number and byte_offset into a single integer using
+    segment_number * 10**18 + byte_offset for storage.
+
+    For local topics, segment_number is the numeric value parsed from
+    data-NNNN.jsonl filenames. For external glob sources that don't follow
+    that naming convention, segment_number is a positional file index.
     """
 
-    file_index: int = 0
+    segment_number: int = 0
     byte_offset: int = 0
 
     _SCALE: int = field(default=10**18, init=False, repr=False)
 
     def encode(self) -> int:
         """Encode to a single integer for storage."""
-        return self.file_index * self._SCALE + self.byte_offset
+        return self.segment_number * self._SCALE + self.byte_offset
 
     @classmethod
     def decode(cls, raw: int) -> "GlobOffset":
         """Decode from stored integer."""
         scale = 10**18
-        return cls(file_index=raw // scale, byte_offset=raw % scale)
+        return cls(segment_number=raw // scale, byte_offset=raw % scale)

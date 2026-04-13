@@ -1,10 +1,12 @@
 # ABOUTME: Event consumer with batch and follow modes
 # ABOUTME: Reads JSONL lines from registered sources with offset tracking
 
+import bisect
 import contextlib
 import fnmatch
 import glob as glob_module
 import logging
+import re
 import sys
 import warnings
 from collections.abc import Iterator
@@ -18,6 +20,27 @@ from brooklet.types import Event, GlobOffset, Mode, SingleFileOffset
 logger = logging.getLogger("brooklet")
 
 _OBSERVER_JOIN_TIMEOUT = 5
+
+# Matches local segment filenames produced by brooklet (e.g. data-0003.jsonl)
+_SEGMENT_RE = re.compile(r"data-(\d+)\.jsonl$")
+
+
+def _parse_segment_number(filepath: str) -> int | None:
+    """Extract segment number from a data-NNNN.jsonl filename.
+
+    Returns None for files that don't follow the segment naming convention.
+    """
+    m = _SEGMENT_RE.search(filepath)
+    return int(m.group(1)) if m else None
+
+
+def _find_start_index(segment_numbers: list[int], target_segment: int) -> int:
+    """Find the file index to start reading from using binary search.
+
+    Uses bisect on segment_numbers to find the leftmost segment >= target_segment.
+    Returns len(segment_numbers) if all segments are below target.
+    """
+    return bisect.bisect_left(segment_numbers, target_segment)
 
 
 class Consumer:
@@ -200,42 +223,63 @@ class Consumer:
 
         Shared between batch glob and glob+follow modes. During follow mode,
         also populates _file_positions for subsequent tailing.
+
+        For files following the data-NNNN.jsonl naming convention, uses
+        segment numbers and binary search to find the starting position.
+        This correctly handles gaps from segment deletion/compaction.
+        For other glob sources, falls back to positional indexing.
         """
         assert isinstance(self._offset, GlobOffset)
 
         if not files:
-            if self._offset.file_index != 0 or self._offset.byte_offset != 0:
+            if self._offset.segment_number != 0 or self._offset.byte_offset != 0:
                 logger.error(
                     "Glob matched no files but offset is non-zero "
-                    "(file_index=%d, byte_offset=%d). "
+                    "(segment_number=%d, byte_offset=%d). "
                     "Resetting offset (topic=%s, group=%s).",
-                    self._offset.file_index,
+                    self._offset.segment_number,
                     self._offset.byte_offset,
                     self._topic,
                     self._group,
                 )
-                self._offset = GlobOffset(file_index=0, byte_offset=0)
+                self._offset = GlobOffset(segment_number=0, byte_offset=0)
             return
 
-        start_file_index = self._offset.file_index
-        start_byte_offset = self._offset.byte_offset
+        # Determine whether all files follow the data-NNNN.jsonl convention
+        parsed = [_parse_segment_number(f) for f in files]
+        use_segments = all(sn is not None for sn in parsed)
 
-        if start_file_index >= len(files):
-            logger.error(
-                "Saved file_index %d is out of bounds (only %d files matched). "
-                "Files may have been added or removed between sessions. "
-                "Resetting to start of all files (topic=%s, group=%s).",
-                start_file_index,
-                len(files),
-                self._topic,
-                self._group,
-            )
-            start_file_index = 0
-            start_byte_offset = 0
-            self._offset = GlobOffset(file_index=0, byte_offset=0)
+        if use_segments:
+            # Segment-number-based lookup via binary search — stable across deletion
+            segment_numbers: list[int] = [sn for sn in parsed if sn is not None]
+            start_idx = _find_start_index(segment_numbers, self._offset.segment_number)
+            # Only apply saved byte_offset if the target segment is exactly the saved one
+            if start_idx < len(files) and segment_numbers[start_idx] == self._offset.segment_number:
+                start_byte_offset = self._offset.byte_offset
+            else:
+                start_byte_offset = 0
+        else:
+            # Positional fallback for external glob sources
+            segment_numbers = list(range(len(files)))
+            start_idx = self._offset.segment_number
+            start_byte_offset = self._offset.byte_offset
+
+            if start_idx >= len(files):
+                logger.error(
+                    "Saved segment_number %d is out of bounds (only %d files matched). "
+                    "Files may have been added or removed between sessions. "
+                    "Resetting to start of all files (topic=%s, group=%s).",
+                    start_idx,
+                    len(files),
+                    self._topic,
+                    self._group,
+                )
+                start_idx = 0
+                start_byte_offset = 0
+                self._offset = GlobOffset(segment_number=0, byte_offset=0)
 
         for i, filepath in enumerate(files):
-            if i < start_file_index:
+            if i < start_idx:
                 # Still record position for follow mode
                 if self._follow:
                     try:
@@ -261,14 +305,16 @@ class Consumer:
                     e,
                 )
                 # Advance offset past this file
+                seg_num = segment_numbers[i]
                 if i == len(files) - 1:
-                    self._offset = GlobOffset(file_index=i, byte_offset=0)
+                    self._offset = GlobOffset(segment_number=seg_num, byte_offset=0)
                 else:
-                    self._offset = GlobOffset(file_index=i + 1, byte_offset=0)
+                    next_seg = segment_numbers[i + 1]
+                    self._offset = GlobOffset(segment_number=next_seg, byte_offset=0)
                 continue
 
             try:
-                if i == start_file_index:
+                if i == start_idx:
                     f.seek(start_byte_offset)
 
                 # Track active file so the batch finally block can capture
@@ -285,10 +331,12 @@ class Consumer:
                     self._file_positions[filepath] = end_pos
 
                 # After reading this file, update offset to next file
+                seg_num = segment_numbers[i]
                 if i == len(files) - 1:
-                    self._offset = GlobOffset(file_index=i, byte_offset=end_pos)
+                    self._offset = GlobOffset(segment_number=seg_num, byte_offset=end_pos)
                 else:
-                    self._offset = GlobOffset(file_index=i + 1, byte_offset=0)
+                    next_seg = segment_numbers[i + 1]
+                    self._offset = GlobOffset(segment_number=next_seg, byte_offset=0)
                 # Normal path: release the active-file tracker so the
                 # finally below leaves self._offset at the advanced value.
                 self._glob_active_file = None
@@ -300,7 +348,9 @@ class Consumer:
                 # we leave self._offset at its advanced value.
                 if self._glob_active_file is f:
                     with contextlib.suppress(OSError, ValueError):
-                        self._offset = GlobOffset(file_index=i, byte_offset=f.tell())
+                        self._offset = GlobOffset(
+                            segment_number=segment_numbers[i], byte_offset=f.tell()
+                        )
                     self._glob_active_file = None
                 f.close()
 
@@ -406,11 +456,14 @@ class Consumer:
                         )
                         continue
 
-                    # Update GlobOffset: find this file's index in the sorted list
-                    all_files = sorted(self._file_positions.keys())
-                    file_idx = all_files.index(filepath)
+                    # Update GlobOffset: use segment number if the file follows
+                    # the data-NNNN.jsonl convention, otherwise use positional index
+                    seg_num = _parse_segment_number(filepath)
+                    if seg_num is None:
+                        all_files = sorted(self._file_positions.keys())
+                        seg_num = all_files.index(filepath)
                     self._offset = GlobOffset(
-                        file_index=file_idx,
+                        segment_number=seg_num,
                         byte_offset=self._file_positions[filepath],
                     )
 
@@ -469,7 +522,7 @@ class Consumer:
             if self._file_handle is not None and not self._file_handle.closed:
                 if isinstance(self._offset, GlobOffset):
                     self._offset = GlobOffset(
-                        file_index=self._offset.file_index,
+                        segment_number=self._offset.segment_number,
                         byte_offset=self._file_handle.tell(),
                     )
                 else:
