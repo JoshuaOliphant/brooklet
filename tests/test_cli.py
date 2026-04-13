@@ -79,11 +79,13 @@ def test_produce_reads_stdin(tmp_path):
     )
     assert result.exit_code == 0
 
-    data_file = tmp_path / "my-topic" / "data.jsonl"
-    assert data_file.exists()
-    lines = data_file.read_text().strip().split("\n")
-    assert len(lines) == 2
-    for line in lines:
+    data_files = sorted((tmp_path / "my-topic").glob("data-*.jsonl"))
+    assert data_files
+    all_lines = []
+    for df in data_files:
+        all_lines.extend(df.read_text().strip().split("\n"))
+    assert len(all_lines) == 2
+    for line in all_lines:
         event = json.loads(line)
         assert "_ts" in event
         assert "_seq" in event
@@ -104,9 +106,12 @@ def test_produce_skips_invalid_json(tmp_path):
     )
     assert result.exit_code == 0
 
-    data_file = tmp_path / "my-topic" / "data.jsonl"
-    lines = data_file.read_text().strip().split("\n")
-    assert len(lines) == 2
+    data_files = sorted((tmp_path / "my-topic").glob("data-*.jsonl"))
+    assert data_files
+    all_lines = []
+    for df in data_files:
+        all_lines.extend(df.read_text().strip().split("\n"))
+    assert len(all_lines) == 2
 
 
 def test_produce_with_source(tmp_path):
@@ -126,8 +131,9 @@ def test_produce_with_source(tmp_path):
     )
     assert result.exit_code == 0
 
-    data_file = tmp_path / "my-topic" / "data.jsonl"
-    event = json.loads(data_file.read_text().strip())
+    data_files = sorted((tmp_path / "my-topic").glob("data-*.jsonl"))
+    assert data_files
+    event = json.loads(data_files[0].read_text().strip())
     assert event["_src"] == "my-app"
 
 

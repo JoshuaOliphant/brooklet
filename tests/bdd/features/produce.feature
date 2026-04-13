@@ -12,8 +12,8 @@ Feature: Stream produce
     Scenario: Produce creates topic directory and writes event
         When the user produces an event to topic "my-topic" with type "hello"
         Then a directory "my-topic" exists inside the stream directory
-        And a file "my-topic/data.jsonl" exists inside the stream directory
-        And the file "my-topic/data.jsonl" contains exactly 1 JSON line
+        And a segment file exists in "my-topic" inside the stream directory
+        And the segment files in "my-topic" contain exactly 1 JSON line
         And the JSON line contains the original payload field type "hello"
 
     @ac-2
@@ -39,7 +39,7 @@ Feature: Stream produce
     Scenario: Produce appends atomically
         Given 2 events have been produced to topic "append-test"
         When the user produces an event to topic "append-test" with type "third"
-        Then the file "append-test/data.jsonl" contains exactly 3 JSON lines
+        Then the segment files in "append-test" contain exactly 3 JSON lines
         And the first 2 lines are unchanged
 
     @ac-6
@@ -70,7 +70,7 @@ Feature: Stream produce
     Scenario: Path-style topic names create nested directories
         When the user produces an event to topic "scout/session-stats" with type "nested"
         Then a directory "scout/session-stats" exists inside the stream directory
-        And a file "scout/session-stats/data.jsonl" exists inside the stream directory
+        And a segment file exists in "scout/session-stats" inside the stream directory
 
     @ac-11
     Scenario: Topic names with path traversal are rejected

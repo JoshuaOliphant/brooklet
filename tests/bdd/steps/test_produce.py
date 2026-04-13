@@ -41,9 +41,12 @@ def given_n_events_produced(stream, ctx, count, topic):
         ctx["events_produced"].append(event)
     # Capture current file state for AC-5 (append atomicity check)
     stream_dir = Path(stream._path)
-    data_file = stream_dir / topic / "data.jsonl"
-    if data_file.exists():
-        ctx["original_lines"] = data_file.read_text().splitlines()
+    data_files = sorted((stream_dir / topic).glob("data-*.jsonl"))
+    if data_files:
+        all_lines = []
+        for df in data_files:
+            all_lines.extend(df.read_text().splitlines())
+        ctx["original_lines"] = all_lines
 
 
 @given(parsers.parse('an external source registered as "{name}"'))
@@ -131,6 +134,14 @@ def then_file_exists(stream, path):
     assert full_path.is_file(), f"Expected file at {full_path}"
 
 
+@then(parsers.parse('a segment file exists in "{topic}" inside the stream directory'))
+def then_segment_file_exists(stream, topic):
+    """Verify at least one data segment file exists in the topic directory."""
+    topic_dir = Path(stream._path) / topic
+    segments = list(topic_dir.glob("data-*.jsonl"))
+    assert segments, f"Expected segment files in {topic_dir}"
+
+
 @then(parsers.parse('the file "{path}" contains exactly {count:d} JSON line'))
 def then_file_has_n_lines_singular(stream, path, count):
     """Verify the number of JSON lines in a file (singular form)."""
@@ -147,14 +158,35 @@ def then_file_has_n_lines_plural(stream, path, count):
     assert len(lines) == count, f"Expected {count} lines, got {len(lines)}"
 
 
+@then(parsers.parse('the segment files in "{topic}" contain exactly {count:d} JSON line'))
+def then_segments_have_n_lines_singular(stream, topic, count):
+    """Verify total JSON lines across all segment files in a topic (singular form)."""
+    topic_dir = Path(stream._path) / topic
+    segments = sorted(topic_dir.glob("data-*.jsonl"))
+    all_lines = []
+    for seg in segments:
+        all_lines.extend(line for line in seg.read_text().splitlines() if line.strip())
+    assert len(all_lines) == count, f"Expected {count} lines, got {len(all_lines)}"
+
+
+@then(parsers.parse('the segment files in "{topic}" contain exactly {count:d} JSON lines'))
+def then_segments_have_n_lines_plural(stream, topic, count):
+    """Verify total JSON lines across all segment files in a topic (plural form)."""
+    topic_dir = Path(stream._path) / topic
+    segments = sorted(topic_dir.glob("data-*.jsonl"))
+    all_lines = []
+    for seg in segments:
+        all_lines.extend(line for line in seg.read_text().splitlines() if line.strip())
+    assert len(all_lines) == count, f"Expected {count} lines, got {len(all_lines)}"
+
+
 @then(parsers.parse('the JSON line contains the original payload field type "{expected}"'))
 def then_payload_contains_type(stream, expected):
     """Verify the produced event contains the original type field."""
-    # Read the last written topic's data file
-    # Find the most recently modified data.jsonl
-    data_files = list(Path(stream._path).rglob("data.jsonl"))
-    assert data_files, "No data.jsonl files found"
-    last_line = data_files[0].read_text().splitlines()[-1]
+    # Find the most recently modified segment file
+    data_files = sorted(Path(stream._path).rglob("data-*.jsonl"))
+    assert data_files, "No data segment files found"
+    last_line = data_files[-1].read_text().splitlines()[-1]
     event = json.loads(last_line)
     assert event["type"] == expected
 
@@ -162,7 +194,7 @@ def then_payload_contains_type(stream, expected):
 @then("the written event contains a valid ISO 8601 timestamp in _ts")
 def then_event_has_valid_ts(stream):
     """Verify _ts is a valid ISO 8601 timestamp."""
-    data_files = list(Path(stream._path).rglob("data.jsonl"))
+    data_files = sorted(Path(stream._path).rglob("data-*.jsonl"))
     last_line = data_files[-1].read_text().splitlines()[-1]
     event = json.loads(last_line)
     assert "_ts" in event
@@ -172,7 +204,7 @@ def then_event_has_valid_ts(stream):
 @then(parsers.parse("the written event contains _seq set to {seq:d}"))
 def then_event_has_seq(stream, seq):
     """Verify _seq value in the last written event."""
-    data_files = list(Path(stream._path).rglob("data.jsonl"))
+    data_files = sorted(Path(stream._path).rglob("data-*.jsonl"))
     last_line = data_files[-1].read_text().splitlines()[-1]
     event = json.loads(last_line)
     assert event["_seq"] == seq
@@ -181,7 +213,7 @@ def then_event_has_seq(stream, seq):
 @then(parsers.parse('the written event contains _src set to "{src}"'))
 def then_event_has_src(stream, src):
     """Verify _src value in the last written event."""
-    data_files = list(Path(stream._path).rglob("data.jsonl"))
+    data_files = sorted(Path(stream._path).rglob("data-*.jsonl"))
     last_line = data_files[-1].read_text().splitlines()[-1]
     event = json.loads(last_line)
     assert event["_src"] == src
@@ -190,7 +222,7 @@ def then_event_has_src(stream, src):
 @then(parsers.parse("the last written event has _seq set to {seq:d}"))
 def then_last_event_has_seq(stream, seq):
     """Verify _seq value in the last line of the most recent data file."""
-    data_files = list(Path(stream._path).rglob("data.jsonl"))
+    data_files = sorted(Path(stream._path).rglob("data-*.jsonl"))
     last_line = data_files[-1].read_text().splitlines()[-1]
     event = json.loads(last_line)
     assert event["_seq"] == seq
@@ -199,7 +231,7 @@ def then_last_event_has_seq(stream, seq):
 @then(parsers.parse('the written event contains _ts "{expected_ts}"'))
 def then_event_has_specific_ts(stream, expected_ts):
     """Verify _ts was preserved (not overwritten)."""
-    data_files = list(Path(stream._path).rglob("data.jsonl"))
+    data_files = sorted(Path(stream._path).rglob("data-*.jsonl"))
     last_line = data_files[-1].read_text().splitlines()[-1]
     event = json.loads(last_line)
     assert event["_ts"] == expected_ts
@@ -208,8 +240,10 @@ def then_event_has_specific_ts(stream, expected_ts):
 @then("the first 2 lines are unchanged")
 def then_first_lines_unchanged(stream, ctx):
     """Verify that appending didn't modify existing lines."""
-    data_files = list(Path(stream._path).rglob("data.jsonl"))
-    current_lines = data_files[-1].read_text().splitlines()
+    data_files = sorted(Path(stream._path).rglob("data-*.jsonl"))
+    current_lines = []
+    for df in data_files:
+        current_lines.extend(df.read_text().splitlines())
     for i, original in enumerate(ctx["original_lines"]):
         assert current_lines[i] == original, f"Line {i} was modified"
 
