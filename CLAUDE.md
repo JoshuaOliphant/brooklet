@@ -11,7 +11,9 @@ Brooklet is a **consumer coordination layer**, not a message broker. External to
 - `offsets.py` — Byte offset persistence per consumer group
 - `registry.py` — Maps topic names to sources; supports external (registered) and local (produced)
 - `consumer.py` — Batch and follow-mode iterators over JSONL files
-- `stream.py` — Orchestrator: `register()`, `produce()`, `consume()`, `topics()`
+- `stream.py` — Orchestrator: `register()`, `produce()`, `consume()`, `topics()`. Segment rotation + sidecar + flock
+- `locking.py` — Topic-level file locking via `fcntl.flock(LOCK_EX|LOCK_NB)` for single-writer enforcement
+- `sidecar.py` — Sequence number sidecar cache for O(1) next-seq lookups with crash recovery
 - `cli.py` — Unified CLI entry point; Typer app with core commands and plugin loading
 - `types.py` — Shared type definitions (Mode, Event, offset dataclasses, SourceDef)
 - `plugins.py` — Plugin system using pluggy for CLI extensibility
@@ -26,6 +28,7 @@ Brooklet is a **consumer coordination layer**, not a message broker. External to
 - `produce()` is in core — consumers that transform and re-emit need a clean write path (DEC-011)
 - Unified topic namespace with auto-registration — `produce()` auto-registers local topics (DEC-012)
 - Source registration maps arbitrary external JSONL paths to topic names (DEC-007)
+- Size-based segment rotation with flock single-writer enforcement (DEC-014)
 - Thin envelope with `_ts`, `_seq`, `_src` auto-injected on both read and write (DEC-004)
 - watchdog for filesystem watching in follow mode (DEC-008)
 - Python 3.12+ minimum (DEC-009)
@@ -37,11 +40,17 @@ Brooklet is a **consumer coordination layer**, not a message broker. External to
 ```
 <stream_dir>/
 ├── <topic>/
-│   └── data.jsonl            # Produced events (local topics)
+│   ├── data-0001.jsonl       # Segment 1 (local topics)
+│   ├── data-0002.jsonl       # Segment 2
+│   └── data-0003.jsonl       # Active segment
 ├── <parent>/<child>/
-│   └── data.jsonl            # Path-style nested topics
+│   └── data-0001.jsonl       # Path-style nested topics
 └── .brooklet/
     ├── sources.json          # Registry (external + local sources)
+    ├── seq/
+    │   └── <topic>.json      # {"next_seq": N} — sidecar cache
+    ├── locks/
+    │   └── <topic>.lock      # flock target for single-writer
     └── offsets/
         └── <group>-<topic>.json  # Byte offset per consumer group
 ```
