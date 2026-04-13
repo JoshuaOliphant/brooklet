@@ -528,6 +528,11 @@ class Consumer:
                 else:
                     self._offset = SingleFileOffset(byte_offset=self._file_handle.tell())
                 self._save_offset()
+            elif isinstance(self._offset, GlobOffset) and self._offset.encode() > 0:
+                # Glob-mode consumers track progress via self._offset rather than
+                # _file_handle (which is local to the sub-generators). Save any
+                # progress accumulated so far so restarts resume correctly.
+                self._save_offset()
         finally:
             if self._observer is not None:
                 self._stop_observer(self._observer)

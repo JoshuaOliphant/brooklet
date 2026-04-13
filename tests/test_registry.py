@@ -111,13 +111,17 @@ class TestRegistryLocalGlob:
         source = reg.get("logs")
         assert source["mode"] == "glob"
 
-    def test_register_local_rejects_mode_change(self, brooklet_dir):
-        """Changing mode on an already-registered local topic raises ValueError."""
+    def test_register_local_allows_mode_update(self, brooklet_dir):
+        """Local topics can be updated from single-file to glob mode for segment rotation."""
         reg = Registry(brooklet_dir)
         reg.register_local("events", "/tmp/streams/events/data.jsonl", mode="single-file")
 
-        with pytest.raises(ValueError):
-            reg.register_local("events", "/tmp/streams/events/data-*.jsonl", mode="glob")
+        # Updating path and mode for the same local topic is allowed (used during rotation)
+        reg.register_local("events", "/tmp/streams/events/data-*.jsonl", mode="glob")
+
+        source = reg.get("events")
+        assert source["mode"] == "glob"
+        assert source["path"] == "/tmp/streams/events/data-*.jsonl"
 
     def test_get_returns_correct_mode_for_local_glob(self, brooklet_dir):
         """After registering with glob mode, get() returns the correct mode."""

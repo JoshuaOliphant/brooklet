@@ -1,12 +1,16 @@
 # ABOUTME: Stream orchestrator — main entry point for brooklet operations
 # ABOUTME: Coordinates registry, consumer, and offset modules into a unified API
 
+import glob as glob_module
+import re
 from pathlib import Path
 
 from brooklet.consumer import Consumer
 from brooklet.contrib import otel
 from brooklet.envelope import serialize
+from brooklet.locking import topic_lock
 from brooklet.registry import Registry
+from brooklet.sidecar import derive_next_seq, read_next_seq, write_next_seq
 from brooklet.types import Mode
 
 
@@ -28,6 +32,8 @@ class Stream:
         self._offsets_dir.mkdir(exist_ok=True)
 
         self._registry = Registry(self._brooklet_dir)
+        # In-memory segment cache per topic: {topic: (active_path, cached_size, segment_number)}
+        self._segment_cache: dict[str, tuple[Path, int, int]] = {}
 
     def register(self, name: str, path: str, mode: Mode) -> None:
         """Register an external JSONL path as a named topic.
@@ -39,21 +45,68 @@ class Stream:
         """
         self._registry.register(name, path, mode)
 
-    def produce(self, topic: str, event: dict, source: str | None = None) -> None:
-        """Produce an event to a local topic.
+    def _discover_or_migrate_segments(self, topic: str, topic_dir: Path) -> None:
+        """Populate the segment cache for a topic, handling legacy migration if needed.
+
+        If only a bare data.jsonl exists (no segment files), it is renamed to
+        data-0000.jsonl to migrate it into the segment numbering scheme.
+        Sets self._segment_cache[topic] = (active_path, cached_size, seg_num).
+        """
+        segments = sorted(glob_module.glob(str(topic_dir / "data-*.jsonl")))
+        bare = topic_dir / "data.jsonl"
+
+        if not segments and bare.exists():
+            # Legacy migration: rename data.jsonl → data-0000.jsonl.
+            # New writes start in data-0001.jsonl so 0000 is the historical archive.
+            migrated = topic_dir / "data-0000.jsonl"
+            bare.rename(migrated)
+            # Don't add to segments — fall through to brand-new topic logic at 0001
+            seg_num = 1
+            active = topic_dir / f"data-{seg_num:04d}.jsonl"
+            active.touch()
+            self._segment_cache[topic] = (active, 0, seg_num)
+            return
+
+        if segments:
+            # Parse segment number from the last (active) segment
+            m = re.search(r"data-(\d+)\.jsonl$", segments[-1])
+            seg_num = int(m.group(1)) if m else 0
+            active = Path(segments[-1])
+            size = active.stat().st_size
+        else:
+            # Brand new topic: start at segment 0001
+            seg_num = 1
+            active = topic_dir / f"data-{seg_num:04d}.jsonl"
+            active.touch()
+            size = 0
+
+        self._segment_cache[topic] = (active, size, seg_num)
+
+    def produce(
+        self,
+        topic: str,
+        event: dict,
+        source: str | None = None,
+        max_segment_bytes: int = 10_000_000,
+    ) -> None:
+        """Produce an event to a local topic using segment rotation.
 
         Creates the topic directory and auto-registers it on first write.
         Envelope fields (_ts, _seq, _src) are injected automatically.
+        Segments are rotated when the active segment exceeds max_segment_bytes.
 
         Args:
             topic: Topic name. Supports path-style nesting (e.g. "scout/stats").
             event: Event payload as a dict.
             source: Optional producer identifier for _src field.
+            max_segment_bytes: Rotate to a new segment when active file exceeds
+                this size in bytes.
 
         Raises:
             TypeError: If event is not a dict.
             ValueError: If topic name contains path traversal or collides with
                 an external registered source.
+            BrookletWriteLockError: If another process holds the write lock.
         """
         with otel.tracer.start_as_current_span("produce") as span:
             span.set_attribute("brooklet.topic", topic)
@@ -72,25 +125,49 @@ class Stream:
                 msg = f"topic {topic!r} is already registered as an external source"
                 raise ValueError(msg)
 
-            # Create topic directory and data file path
             topic_dir = self._path / topic
             topic_dir.mkdir(parents=True, exist_ok=True)
-            data_path = topic_dir / "data.jsonl"
 
-            # Determine next sequence number from existing line count
-            next_seq = 0
-            if data_path.exists():
-                with open(data_path) as f:
-                    next_seq = sum(1 for _ in f)
-            next_seq += 1
+            # Acquire exclusive write lock for this topic
+            with topic_lock(self._brooklet_dir, topic):
+                # Populate segment cache if not already present
+                if topic not in self._segment_cache:
+                    self._discover_or_migrate_segments(topic, topic_dir)
 
-            # Serialize with envelope and append
-            line = serialize(dict(event), seq=next_seq, source=source)
-            with open(data_path, "a") as f:
-                f.write(line)
+                active_path, cached_size, seg_num = self._segment_cache[topic]
 
-            # Auto-register in the unified namespace
-            self._registry.register_local(topic, str(data_path))
+                # Rotate to next segment if the active one exceeds the size threshold
+                if cached_size >= max_segment_bytes:
+                    seg_num += 1
+                    active_path = topic_dir / f"data-{seg_num:04d}.jsonl"
+                    active_path.touch()
+                    cached_size = 0
+
+                # Get next_seq from sidecar, re-derive if missing or stale
+                next_seq = read_next_seq(self._brooklet_dir, topic)
+                if next_seq is None:
+                    next_seq = derive_next_seq(active_path)
+                else:
+                    # Verify sidecar against active segment; re-derive if stale
+                    derived = derive_next_seq(active_path)
+                    if derived > next_seq:
+                        next_seq = derived
+
+                # Serialize with envelope and append to the active segment
+                line = serialize(dict(event), seq=next_seq, source=source)
+                with open(active_path, "a") as f:
+                    f.write(line)
+
+                # Update sidecar cache
+                write_next_seq(self._brooklet_dir, topic, next_seq + 1)
+
+                # Update in-memory segment cache
+                cached_size += len(line.encode())
+                self._segment_cache[topic] = (active_path, cached_size, seg_num)
+
+            # Auto-register with glob pattern in the unified namespace
+            glob_pattern = str(topic_dir / "data-*.jsonl")
+            self._registry.register_local(topic, glob_pattern, mode="glob")
             otel.meter.create_counter(
                 "brooklet.events_produced", description="Total events produced"
             ).add(1, {"topic": topic})
