@@ -263,8 +263,17 @@ def test_watch_saves_offset_on_sigterm(tmp_path):
     data = json.loads(offset_file.read_text())
     # Require full catch-up, not just "something saved". A partial offset
     # would pass `> 0` but still break resumability on restart.
-    file_size = (tmp_path / "sigterm" / "data.jsonl").stat().st_size
-    assert data["offset"] == file_size, (
-        f"expected offset to equal file size after full catch-up, "
-        f"got offset={data['offset']}, file_size={file_size}"
+    # Offsets use GlobOffset encoding: segment_number * 10**18 + byte_offset.
+    # Decode to get the active segment number and byte position within it.
+    scale = 10**18
+    raw_offset = data["offset"]
+    seg_num = raw_offset // scale
+    byte_offset = raw_offset % scale
+    segments = sorted((tmp_path / "sigterm").glob("data-*.jsonl"))
+    assert segments, "Expected at least one segment file"
+    active_seg = segments[seg_num - 1] if seg_num > 0 else segments[0]
+    file_size = active_seg.stat().st_size
+    assert byte_offset == file_size, (
+        f"expected byte offset to equal active segment size after full catch-up, "
+        f"got byte_offset={byte_offset}, file_size={file_size}"
     )

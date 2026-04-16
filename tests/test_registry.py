@@ -82,3 +82,52 @@ class TestRegistry:
 
         with pytest.raises(ValueError, match="Corrupt"):
             Registry(brooklet_dir)
+
+
+class TestRegistryLocalGlob:
+    def test_register_local_stores_glob_pattern(self, brooklet_dir):
+        """register_local with mode='glob' stores the entry with mode 'glob'."""
+        reg = Registry(brooklet_dir)
+        reg.register_local("events", "/tmp/streams/events/data-*.jsonl", mode="glob")
+
+        source = reg.get("events")
+        assert source["path"] == "/tmp/streams/events/data-*.jsonl"
+        assert source["mode"] == "glob"
+
+    def test_register_local_default_mode_is_single_file(self, brooklet_dir):
+        """register_local without mode defaults to 'single-file' for backward compat."""
+        reg = Registry(brooklet_dir)
+        reg.register_local("events", "/tmp/streams/events/data.jsonl")
+
+        source = reg.get("events")
+        assert source["mode"] == "single-file"
+
+    def test_register_local_idempotent_with_glob(self, brooklet_dir):
+        """Calling register_local twice with same name+path+mode='glob' does not error."""
+        reg = Registry(brooklet_dir)
+        reg.register_local("logs", "/tmp/logs/data-*.jsonl", mode="glob")
+        reg.register_local("logs", "/tmp/logs/data-*.jsonl", mode="glob")  # no error
+
+        source = reg.get("logs")
+        assert source["mode"] == "glob"
+
+    def test_register_local_allows_mode_update(self, brooklet_dir):
+        """Local topics can be updated from single-file to glob mode for segment rotation."""
+        reg = Registry(brooklet_dir)
+        reg.register_local("events", "/tmp/streams/events/data.jsonl", mode="single-file")
+
+        # Updating path and mode for the same local topic is allowed (used during rotation)
+        reg.register_local("events", "/tmp/streams/events/data-*.jsonl", mode="glob")
+
+        source = reg.get("events")
+        assert source["mode"] == "glob"
+        assert source["path"] == "/tmp/streams/events/data-*.jsonl"
+
+    def test_get_returns_correct_mode_for_local_glob(self, brooklet_dir):
+        """After registering with glob mode, get() returns the correct mode."""
+        reg = Registry(brooklet_dir)
+        reg.register_local("metrics", "/tmp/metrics/data-*.jsonl", mode="glob")
+
+        source = reg.get("metrics")
+        assert source["path"] == "/tmp/metrics/data-*.jsonl"
+        assert source["mode"] == "glob"

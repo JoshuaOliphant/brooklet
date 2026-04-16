@@ -93,15 +93,21 @@ class Registry:
         self._sources[name] = SourceDef(path=path, mode=mode)
         self._save()
 
-    def register_local(self, name: str, path: str) -> None:
-        """Register a locally-produced topic. Called by produce() on first write."""
+    def register_local(self, name: str, path: str, mode: Mode = "single-file") -> None:
+        """Register a locally-produced topic. Called by produce() on first write.
+
+        If the topic is already registered as local, the path and mode are updated
+        to support transitions (e.g. from single-file to glob on segment rotation).
+        """
         if name in self._sources:
             existing = self._sources[name]
-            if existing.get("type") != "local" or existing["path"] != path:
+            if existing.get("type") != "local":
                 msg = f"topic {name!r} is already registered as an external source"
                 raise ValueError(msg)
-            return  # Already registered as local with same path, idempotent
-        self._sources[name] = {"path": path, "mode": "single-file", "type": "local"}
+            # Allow local topics to be updated (e.g. path/mode change on rotation)
+            if existing["path"] == path and existing.get("mode") == mode:
+                return  # Already registered with same path and mode, idempotent
+        self._sources[name] = {"path": path, "mode": mode, "type": "local"}
         self._save()
 
     def is_external(self, name: str) -> bool:

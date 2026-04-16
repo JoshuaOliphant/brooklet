@@ -305,8 +305,8 @@ class TestConsumerBatch:
         # Observer is None for batch mode, so close should just work
         consumer.close()
 
-    def test_glob_file_index_out_of_bounds_resets(self, tmp_path, offsets_dir, caplog):
-        """Stale file_index beyond file count resets to 0 with error."""
+    def test_glob_segment_number_out_of_bounds_resets(self, tmp_path, offsets_dir, caplog):
+        """Stale segment_number beyond file count resets to 0 with error."""
         from brooklet.offsets import load, save
         from brooklet.types import GlobOffset
 
@@ -317,8 +317,8 @@ class TestConsumerBatch:
             with open(dir_ / name, "w") as f:
                 f.write(json.dumps(event) + "\n")
 
-        # Save offset pointing to file_index=5 (way beyond 2 files)
-        stale = GlobOffset(file_index=5, byte_offset=0)
+        # Save offset pointing to segment_number=5 (way beyond 2 files)
+        stale = GlobOffset(segment_number=5, byte_offset=0)
         save(offsets_dir, "test", "stale-idx", stale.encode())
 
         consumer = Consumer(
@@ -339,14 +339,14 @@ class TestConsumerBatch:
         # Verify error-level log fired
         error_records = [r for r in caplog.records if r.levelno >= logging.ERROR]
         assert any(
-            "file_index" in r.message.lower() or "out of bounds" in r.message.lower()
+            "segment_number" in r.message.lower() or "out of bounds" in r.message.lower()
             for r in error_records
         )
 
         # Verify persisted offset reflects consumption of both files
         raw = load(offsets_dir, "test", "stale-idx")
         persisted = GlobOffset.decode(raw)
-        assert persisted.file_index == 1
+        assert persisted.segment_number == 1
         assert persisted.byte_offset > 0
 
     def test_glob_file_removed_between_sessions(self, tmp_path, offsets_dir, caplog):
@@ -365,8 +365,8 @@ class TestConsumerBatch:
             with open(dir_ / name, "w") as f:
                 f.write(json.dumps(event) + "\n")
 
-        # Simulate having consumed up through file_index=2 (c.jsonl) with some byte offset
-        stale = GlobOffset(file_index=2, byte_offset=100)
+        # Simulate having consumed up through segment_number=2 (c.jsonl) with some byte offset
+        stale = GlobOffset(segment_number=2, byte_offset=100)
         save(offsets_dir, "test", "removed", stale.encode())
 
         # Now remove a.jsonl — only 2 files remain but saved index is 2
@@ -382,7 +382,7 @@ class TestConsumerBatch:
         with caplog.at_level(logging.ERROR, logger="brooklet"):
             events = list(consumer)
 
-        # file_index=2 is out of bounds for 2 files, should reset and re-read
+        # segment_number=2 is out of bounds for 2 files, should reset and re-read
         assert len(events) == 2
         assert events[0]["type"] == "b"
         assert events[1]["type"] == "c"
@@ -390,14 +390,14 @@ class TestConsumerBatch:
         # Verify error-level log fired
         error_records = [r for r in caplog.records if r.levelno >= logging.ERROR]
         assert any(
-            "file_index" in r.message.lower() or "out of bounds" in r.message.lower()
+            "segment_number" in r.message.lower() or "out of bounds" in r.message.lower()
             for r in error_records
         )
 
         # Verify persisted offset reflects consumption of remaining files
         raw = load(offsets_dir, "test", "removed")
         persisted = GlobOffset.decode(raw)
-        assert persisted.file_index == 1
+        assert persisted.segment_number == 1
         assert persisted.byte_offset > 0
 
     def test_glob_empty_files_with_stale_offset_resets(self, tmp_path, offsets_dir, caplog):
@@ -408,8 +408,8 @@ class TestConsumerBatch:
         dir_ = tmp_path / "empty_glob"
         dir_.mkdir()
 
-        # Save a stale offset pointing to file_index=3
-        stale = GlobOffset(file_index=3, byte_offset=42)
+        # Save a stale offset pointing to segment_number=3
+        stale = GlobOffset(segment_number=3, byte_offset=42)
         save(offsets_dir, "test", "empty-stale", stale.encode())
 
         consumer = Consumer(
@@ -435,11 +435,11 @@ class TestConsumerBatch:
         # Verify persisted offset is reset to 0
         raw = load(offsets_dir, "test", "empty-stale")
         persisted = GlobOffset.decode(raw)
-        assert persisted.file_index == 0
+        assert persisted.segment_number == 0
         assert persisted.byte_offset == 0
 
     def test_glob_follow_with_stale_index_resets(self, tmp_path, offsets_dir, caplog):
-        """Stale file_index in follow mode resets and reads all files."""
+        """Stale segment_number in follow mode resets and reads all files."""
         import threading
         import time
 
@@ -455,7 +455,7 @@ class TestConsumerBatch:
                 f.write(json.dumps(event) + "\n")
 
         # Save stale offset beyond file count
-        stale = GlobOffset(file_index=5, byte_offset=0)
+        stale = GlobOffset(segment_number=5, byte_offset=0)
         save(offsets_dir, "test", "follow-stale", stale.encode())
 
         consumer = Consumer(
@@ -499,7 +499,7 @@ class TestConsumerBatch:
         # Verify error-level reset log fired
         error_records = [r for r in caplog.records if r.levelno >= logging.ERROR]
         assert any(
-            "file_index" in r.message.lower() or "out of bounds" in r.message.lower()
+            "segment_number" in r.message.lower() or "out of bounds" in r.message.lower()
             for r in error_records
         )
 
@@ -545,7 +545,7 @@ class TestConsumerOffsetSaveDurability:
         raw = load(offsets_dir, "test", "glob-interrupt")
         assert raw > 0
         persisted = GlobOffset.decode(raw)
-        assert persisted.byte_offset > 0 or persisted.file_index > 0
+        assert persisted.byte_offset > 0 or persisted.segment_number > 0
 
     def test_glob_batch_saves_offset_without_explicit_close(self, tmp_path, offsets_dir):
         """Exhausting a glob batch iterator must save the offset via finally,
@@ -576,7 +576,7 @@ class TestConsumerOffsetSaveDurability:
 
         raw = load(offsets_dir, "test", "glob-exhaust")
         persisted = GlobOffset.decode(raw)
-        assert persisted.file_index == 1
+        assert persisted.segment_number == 1
         assert persisted.byte_offset > 0
 
     def test_single_file_batch_saves_offset_without_explicit_close(self, sample_jsonl, offsets_dir):
@@ -658,3 +658,172 @@ class TestConsumerOffsetSaveDurability:
         captured = capsys.readouterr()
         assert "brooklet" in captured.err
         assert "glob-save-fail" in captured.err
+
+
+class TestConsumerSegmentSearch:
+    """Tests for segment-number-based binary search in glob catch-up."""
+
+    def _make_segment(self, dir_path, segment_num: int, events: list[dict]) -> str:
+        """Write a data-NNNN.jsonl segment file and return its path string."""
+        filename = f"data-{segment_num:04d}.jsonl"
+        path = dir_path / filename
+        with open(path, "w") as f:
+            for event in events:
+                f.write(json.dumps(event) + "\n")
+        return str(path)
+
+    def test_segment_number_parsed_from_filename(self, tmp_path, offsets_dir):
+        """Consumer correctly parses data-0003.jsonl as segment 3."""
+        from brooklet.consumer import _parse_segment_number
+
+        assert _parse_segment_number("data-0003.jsonl") == 3
+        assert _parse_segment_number("/some/path/data-0001.jsonl") == 1
+        assert _parse_segment_number("/deep/path/data-0099.jsonl") == 99
+        assert _parse_segment_number("data-0000.jsonl") == 0
+        # Non-matching filenames return None
+        assert _parse_segment_number("a.jsonl") is None
+        assert _parse_segment_number("events.jsonl") is None
+        assert _parse_segment_number("data.jsonl") is None
+
+    def test_binary_search_finds_correct_segment(self, tmp_path, offsets_dir):
+        """With segments 1, 3, 5 (gap at 2, 4), offset at segment_number=3 starts at segment 3."""
+        from brooklet.offsets import save
+        from brooklet.types import GlobOffset
+
+        dir_ = tmp_path / "topic"
+        dir_.mkdir()
+        self._make_segment(dir_, 1, [{"type": "s1"}])
+        self._make_segment(dir_, 3, [{"type": "s3"}])
+        self._make_segment(dir_, 5, [{"type": "s5"}])
+
+        # Offset says we've already consumed segment 1, start from segment 3
+        offset = GlobOffset(segment_number=3, byte_offset=0)
+        save(offsets_dir, "test", "binary-search", offset.encode())
+
+        consumer = Consumer(
+            path=str(dir_ / "data-*.jsonl"),
+            mode="glob",
+            group="test",
+            topic="binary-search",
+            offsets_dir=offsets_dir,
+        )
+        events = list(consumer)
+
+        # Should read segments 3 and 5 (not segment 1 which was already consumed)
+        types = [e["type"] for e in events]
+        assert "s1" not in types
+        assert "s3" in types
+        assert "s5" in types
+
+    def test_missing_segment_starts_from_next(self, tmp_path, offsets_dir):
+        """Offset at a deleted segment number starts reading from the next available segment."""
+        from brooklet.offsets import save
+        from brooklet.types import GlobOffset
+
+        dir_ = tmp_path / "topic"
+        dir_.mkdir()
+        self._make_segment(dir_, 1, [{"type": "s1"}])
+        self._make_segment(dir_, 3, [{"type": "s3"}])
+        self._make_segment(dir_, 5, [{"type": "s5"}])
+
+        # Offset at segment 2 — but segment 2 was deleted/compacted
+        offset = GlobOffset(segment_number=2, byte_offset=0)
+        save(offsets_dir, "test", "missing-seg", offset.encode())
+
+        consumer = Consumer(
+            path=str(dir_ / "data-*.jsonl"),
+            mode="glob",
+            group="test",
+            topic="missing-seg",
+            offsets_dir=offsets_dir,
+        )
+        events = list(consumer)
+
+        # segment 2 is gone, so start from segment 3 (next >= 2)
+        types = [e["type"] for e in events]
+        assert "s1" not in types
+        assert "s3" in types
+        assert "s5" in types
+
+    def test_fallback_to_positional_for_non_segment_files(self, tmp_path, offsets_dir):
+        """Files like a.jsonl, b.jsonl that don't match data-NNNN.jsonl use positional indexing."""
+        from brooklet.offsets import save
+        from brooklet.types import GlobOffset
+
+        dir_ = tmp_path / "external"
+        dir_.mkdir()
+        for name, event in [("a.jsonl", {"type": "a"}), ("b.jsonl", {"type": "b"})]:
+            with open(dir_ / name, "w") as f:
+                f.write(json.dumps(event) + "\n")
+
+        # segment_number=1 means positional index 1 (b.jsonl) for non-segment files
+        offset = GlobOffset(segment_number=1, byte_offset=0)
+        save(offsets_dir, "test", "positional", offset.encode())
+
+        consumer = Consumer(
+            path=str(dir_ / "*.jsonl"),
+            mode="glob",
+            group="test",
+            topic="positional",
+            offsets_dir=offsets_dir,
+        )
+        events = list(consumer)
+
+        # Positional fallback: skip index 0 (a.jsonl), read from index 1 (b.jsonl)
+        types = [e["type"] for e in events]
+        assert "a" not in types
+        assert "b" in types
+
+    def test_segment_offset_stable_across_deletion(self, tmp_path, offsets_dir):
+        """Delete segment 1 from [1,2,3], consumer at segment_number=2 still finds segment 2."""
+        from brooklet.offsets import save
+        from brooklet.types import GlobOffset
+
+        dir_ = tmp_path / "topic"
+        dir_.mkdir()
+        seg1 = dir_ / "data-0001.jsonl"
+        seg1.write_text(json.dumps({"type": "s1"}) + "\n")
+        self._make_segment(dir_, 2, [{"type": "s2"}])
+        self._make_segment(dir_, 3, [{"type": "s3"}])
+
+        # Consumer was at segment 2 (had finished segment 1)
+        offset = GlobOffset(segment_number=2, byte_offset=0)
+        save(offsets_dir, "test", "stable-after-delete", offset.encode())
+
+        # Now delete segment 1 (compaction)
+        seg1.unlink()
+
+        consumer = Consumer(
+            path=str(dir_ / "data-*.jsonl"),
+            mode="glob",
+            group="test",
+            topic="stable-after-delete",
+            offsets_dir=offsets_dir,
+        )
+        events = list(consumer)
+
+        # Should find segment 2 correctly even though segment 1 is gone
+        types = [e["type"] for e in events]
+        assert "s1" not in types
+        assert "s2" in types
+        assert "s3" in types
+
+    def test_consumer_catch_up_across_multiple_segments(self, tmp_path, offsets_dir):
+        """Consumer reads events across segments 1, 2, 3 in order."""
+        dir_ = tmp_path / "topic"
+        dir_.mkdir()
+        self._make_segment(dir_, 1, [{"type": "s1a"}, {"type": "s1b"}])
+        self._make_segment(dir_, 2, [{"type": "s2a"}])
+        self._make_segment(dir_, 3, [{"type": "s3a"}, {"type": "s3b"}])
+
+        consumer = Consumer(
+            path=str(dir_ / "data-*.jsonl"),
+            mode="glob",
+            group="test",
+            topic="multi-seg",
+            offsets_dir=offsets_dir,
+        )
+        events = list(consumer)
+
+        types = [e["type"] for e in events]
+        assert types == ["s1a", "s1b", "s2a", "s3a", "s3b"]

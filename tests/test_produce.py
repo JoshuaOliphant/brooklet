@@ -98,21 +98,23 @@ class TestProduce:
     """Tests for Stream.produce() — the write path."""
 
     def test_produce_creates_directory_and_file(self, tmp_path):
-        """AC-1: produce creates topic dir and data.jsonl."""
+        """AC-1: produce creates topic dir and a data segment file."""
         s = brooklet.open(str(tmp_path / "streams"))
         s.produce("my-topic", {"type": "hello"})
 
         topic_dir = tmp_path / "streams" / "my-topic"
-        data_file = topic_dir / "data.jsonl"
+        segments = list(topic_dir.glob("data-*.jsonl"))
         assert topic_dir.is_dir()
-        assert data_file.is_file()
+        assert len(segments) >= 1
 
     def test_produce_envelope_fields(self, tmp_path):
         """AC-2: produced events have _ts, _seq, and payload preserved."""
         s = brooklet.open(str(tmp_path / "streams"))
         s.produce("events", {"type": "hello"}, source="test-src")
 
-        data_file = tmp_path / "streams" / "events" / "data.jsonl"
+        topic_dir = tmp_path / "streams" / "events"
+        segments = sorted(topic_dir.glob("data-*.jsonl"))
+        data_file = segments[0]
         event = json.loads(data_file.read_text().strip())
         assert "_ts" in event
         assert event["_seq"] == 1
@@ -125,9 +127,12 @@ class TestProduce:
         for i in range(4):
             s.produce("counter", {"type": f"event-{i}"})
 
-        data_file = tmp_path / "streams" / "counter" / "data.jsonl"
-        lines = data_file.read_text().strip().splitlines()
-        for i, line in enumerate(lines):
+        topic_dir = tmp_path / "streams" / "counter"
+        segments = sorted(topic_dir.glob("data-*.jsonl"))
+        all_lines = []
+        for seg in segments:
+            all_lines.extend(seg.read_text().strip().splitlines())
+        for i, line in enumerate(all_lines):
             event = json.loads(line)
             assert event["_seq"] == i + 1
 
@@ -137,7 +142,9 @@ class TestProduce:
         ts = "2026-01-01T00:00:00Z"
         s.produce("preserve", {"type": "test", "_ts": ts})
 
-        data_file = tmp_path / "streams" / "preserve" / "data.jsonl"
+        topic_dir = tmp_path / "streams" / "preserve"
+        segments = sorted(topic_dir.glob("data-*.jsonl"))
+        data_file = segments[0]
         event = json.loads(data_file.read_text().strip())
         assert event["_ts"] == ts
 
@@ -147,11 +154,18 @@ class TestProduce:
         s.produce("append", {"type": "first"})
         s.produce("append", {"type": "second"})
 
-        data_file = tmp_path / "streams" / "append" / "data.jsonl"
-        first_two = data_file.read_text().splitlines()[:2]
+        topic_dir = tmp_path / "streams" / "append"
+        segments = sorted(topic_dir.glob("data-*.jsonl"))
+        all_lines = []
+        for seg in segments:
+            all_lines.extend(seg.read_text().splitlines())
+        first_two = all_lines[:2]
 
         s.produce("append", {"type": "third"})
-        lines_after = data_file.read_text().splitlines()
+        segments = sorted(topic_dir.glob("data-*.jsonl"))
+        lines_after = []
+        for seg in segments:
+            lines_after.extend(seg.read_text().splitlines())
         assert lines_after[:2] == first_two
         assert len(lines_after) == 3
 
@@ -181,7 +195,9 @@ class TestProduce:
         s = brooklet.open(str(tmp_path / "streams"))
         s.produce("sourced", {"type": "test"}, source="scout")
 
-        data_file = tmp_path / "streams" / "sourced" / "data.jsonl"
+        topic_dir = tmp_path / "streams" / "sourced"
+        segments = sorted(topic_dir.glob("data-*.jsonl"))
+        data_file = segments[0]
         event = json.loads(data_file.read_text().strip())
         assert event["_src"] == "scout"
 
@@ -202,7 +218,7 @@ class TestProduce:
 
         nested_dir = tmp_path / "streams" / "scout" / "session-stats"
         assert nested_dir.is_dir()
-        assert (nested_dir / "data.jsonl").is_file()
+        assert list(nested_dir.glob("data-*.jsonl"))
 
     def test_produce_rejects_path_traversal(self, tmp_path):
         """AC-11: topic names with .. are rejected."""
