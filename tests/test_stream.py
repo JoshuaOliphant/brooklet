@@ -2,6 +2,7 @@
 # ABOUTME: Covers directory creation, topic management, and register-then-consume integration
 
 import json
+import os
 
 import brooklet
 from brooklet.stream import Stream
@@ -92,3 +93,62 @@ class TestStream:
         events = list(stream.consume("my-topic", group="test"))
         assert len(events) == 1
         assert events[0]["_src"] == "my-topic"
+
+
+class TestStreamRelativePathResolution:
+    """Reproduce brooklet-uoj: relative paths in sources.json break cross-cwd consumption."""
+
+    def test_produce_with_relative_stream_dir_stores_absolute_path(self, tmp_path, monkeypatch):
+        """Stream opened with a relative path must store absolute paths in sources.json.
+
+        Reproduces the bug: if Stream is constructed with Path(".") or a relative path,
+        produce() stored relative glob patterns like "demo/data-*.jsonl". A consumer
+        opened from a different cwd would then fail to find the files.
+        """
+        stream_dir = tmp_path / "mystream"
+        stream_dir.mkdir()
+
+        # Change cwd to tmp_path so "mystream" is a valid relative path
+        monkeypatch.chdir(tmp_path)
+
+        # Open the stream using a relative path (simulates `brooklet produce --stream-dir .`)
+        stream = brooklet.open("mystream")
+        stream.produce("demo", {"a": 1})
+
+        # The stored path must be absolute so it resolves regardless of cwd
+        source = stream._registry.get("demo")
+        assert os.path.isabs(source["path"]), (
+            f"Expected absolute path in sources.json, got: {source['path']!r}"
+        )
+
+    def test_consume_from_different_cwd_after_relative_open(self, tmp_path, monkeypatch):
+        """Consumer opened from a different cwd must find files produced via relative stream dir.
+
+        This is the exact failure scenario from the bug report:
+        1. produce() run from stream_dir (cwd == stream_dir)
+        2. consumer run from a completely different cwd
+        3. With relative paths stored, the consumer emits a UserWarning and yields no events.
+        """
+        stream_dir = tmp_path / "mystream"
+        stream_dir.mkdir()
+
+        # Step 1: produce from within the stream dir (cwd = stream_dir)
+        monkeypatch.chdir(stream_dir)
+        stream = brooklet.open(".")
+        stream.produce("demo", {"a": 1})
+
+        # Step 2: switch cwd to somewhere completely unrelated
+        other_dir = tmp_path / "other"
+        other_dir.mkdir()
+        monkeypatch.chdir(other_dir)
+
+        # Step 3: open the stream using its absolute path and consume — must find events
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")  # any UserWarning about missing files = bug
+            stream2 = brooklet.open(str(stream_dir))
+            events = list(stream2.consume("demo", group="test"))
+
+        assert len(events) == 1, (
+            "Consumer found no events — relative path in sources.json not resolved against stream_dir"
+        )

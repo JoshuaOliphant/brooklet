@@ -23,7 +23,7 @@ class Stream:
     """
 
     def __init__(self, path: str | Path) -> None:
-        self._path = Path(path)
+        self._path = Path(path).resolve()
         self._brooklet_dir = self._path / ".brooklet"
         self._offsets_dir = self._brooklet_dir / "offsets"
 
