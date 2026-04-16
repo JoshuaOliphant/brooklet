@@ -3,6 +3,7 @@
 
 import json
 import os
+import warnings
 
 import brooklet
 from brooklet.stream import Stream
@@ -143,12 +144,12 @@ class TestStreamRelativePathResolution:
         monkeypatch.chdir(other_dir)
 
         # Step 3: open the stream using its absolute path and consume — must find events
-        import warnings
         with warnings.catch_warnings():
             warnings.simplefilter("error")  # any UserWarning about missing files = bug
             stream2 = brooklet.open(str(stream_dir))
             events = list(stream2.consume("demo", group="test"))
 
         assert len(events) == 1, (
-            "Consumer found no events — relative path in sources.json not resolved against stream_dir"
+            "Consumer found no events — relative path in sources.json"
+            " not resolved against stream_dir"
         )
