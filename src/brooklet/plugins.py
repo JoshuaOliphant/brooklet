@@ -26,10 +26,12 @@ def get_plugin_manager() -> pluggy.PluginManager:
     _pm = pluggy.PluginManager("brooklet")
     _pm.add_hookspecs(BrookletSpec)
     from brooklet.contrib.claude_analytics import ScoutPlugin
+    from brooklet.contrib.otel_consumer import OtelPlugin
     from brooklet.contrib.pytest_analytics import PytestPlugin
 
     _pm.register(ScoutPlugin())
     _pm.register(PytestPlugin())
+    _pm.register(OtelPlugin())
     _pm.load_setuptools_entrypoints("brooklet")
     return _pm
 

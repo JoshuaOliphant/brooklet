@@ -107,6 +107,13 @@ cd - >/dev/null
 # Brief pause for Vector to bind ports
 sleep 1
 
+# --- Register OTLP topics in brooklet (idempotent) ---
+if command -v brooklet >/dev/null 2>&1; then
+    brooklet register otel/logs "$SCRIPT_DIR/data/jsonl/logs/*.jsonl" --mode glob 2>/dev/null || true
+    brooklet register otel/traces "$SCRIPT_DIR/data/jsonl/traces/*.jsonl" --mode glob 2>/dev/null || true
+    brooklet register otel/metrics "$SCRIPT_DIR/data/jsonl/metrics/*.jsonl" --mode glob 2>/dev/null || true
+fi
+
 echo ""
 echo "=== Observability Stack ==="
 echo "VictoriaLogs   http://127.0.0.1:9428  (LogsQL)"
