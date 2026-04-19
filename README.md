@@ -220,6 +220,44 @@ To generate the input JSONL, install `pytest-reportlog` and run:
 pytest --report-log=test-results.jsonl
 ```
 
+### OpenTelemetry (OTLP consumer)
+
+Consumes [Vector](https://vector.dev/) JSONL output from an OTLP pipeline — traces, metrics, and log records:
+
+```bash
+# Show all spans emitted today
+brooklet otel traces .claude/harness/observability/data/jsonl
+# produce  1.2ms  ROOT  ok  brooklet.topic=events
+# produce  0.4ms  0a1c7335  ok  brooklet.topic=events
+# test-span  2.0ms  ROOT  ok  test.purpose=format-discovery
+
+# Show current metric values
+brooklet otel metrics .claude/harness/observability/data/jsonl
+# brooklet.events_produced  42.0  [counter/incremental]
+# brooklet.events_consumed  15.0  [counter/incremental]
+
+# Tail log records in real time
+brooklet otel logs .claude/harness/observability/data/jsonl --follow --group agent
+```
+
+The argument is the base directory containing `traces/`, `metrics/`, and `logs/` subdirectories — the layout Vector produces when writing OTLP data to daily-rotating JSONL files.
+
+This is the primary dog-food use case for brooklet: the observability harness writes JSONL via Vector's file sink, and brooklet consumes it with offset tracking. Unlike `curl | jq` against VictoriaLogs, the `--follow` + `--group` flags give you gapless resume across agent sessions.
+
+To set up the observability harness and register the topics:
+
+```bash
+# Start Vector + VictoriaLogs + VictoriaMetrics (auto-registers topics)
+bash .claude/harness/observability/start.sh
+
+# Or register manually
+brooklet register otel/logs   ".claude/harness/observability/data/jsonl/logs/*.jsonl"    --mode glob
+brooklet register otel/traces ".claude/harness/observability/data/jsonl/traces/*.jsonl"  --mode glob
+
+# Use brooklet watch for live Monitor-compatible tailing
+brooklet watch otel/traces --group agent
+```
+
 ### Pipeline example: CI health gate
 
 The `--output` flag produces structured summaries to a brooklet topic that downstream consumers can read. See [`examples/ci_health_check.py`](examples/ci_health_check.py) for a complete example that gates CI on test health:
