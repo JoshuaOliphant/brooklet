@@ -109,9 +109,12 @@ sleep 1
 
 # --- Register OTLP topics in brooklet (idempotent) ---
 if command -v brooklet >/dev/null 2>&1; then
-    brooklet register otel/logs "$SCRIPT_DIR/data/jsonl/logs/*.jsonl" --mode glob 2>/dev/null || true
-    brooklet register otel/traces "$SCRIPT_DIR/data/jsonl/traces/*.jsonl" --mode glob 2>/dev/null || true
-    brooklet register otel/metrics "$SCRIPT_DIR/data/jsonl/metrics/*.jsonl" --mode glob 2>/dev/null || true
+    brooklet register otel/logs "$SCRIPT_DIR/data/jsonl/logs/*.jsonl" --mode glob \
+        || echo "WARNING: failed to register otel/logs topic" >&2
+    brooklet register otel/traces "$SCRIPT_DIR/data/jsonl/traces/*.jsonl" --mode glob \
+        || echo "WARNING: failed to register otel/traces topic" >&2
+    brooklet register otel/metrics "$SCRIPT_DIR/data/jsonl/metrics/*.jsonl" --mode glob \
+        || echo "WARNING: failed to register otel/metrics topic" >&2
 fi
 
 echo ""
