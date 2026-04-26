@@ -783,7 +783,7 @@ class TestClaudeAnalyticsGaps:
 
         assert inner_hits["n"] >= 1
 
-    def test_current_follow_yields_session_events_pop(self, tmp_path):
+    def test_current_follow_yields_session_events_pop(self, tmp_path, monkeypatch):
         """When a session leaves the window, session_events is cleaned up."""
         import os
         import threading
@@ -795,7 +795,15 @@ class TestClaudeAnalyticsGaps:
             '{"type": "user", "timestamp": "2026-03-15T02:00:00Z", "sessionId": "session-eph"}\n'
         )
 
+        from brooklet.contrib import claude_analytics as ca
         from brooklet.contrib.claude_analytics import scan_sessions
+
+        # Speed up the internal `time.sleep(2)` poll inside scan_sessions so
+        # the test doesn't trip the >5s slow-test gate in ci_health_check.
+        # Capture the real sleep before patching since `_time` is the same
+        # module — patching it would recurse.
+        real_sleep = _time.sleep
+        monkeypatch.setattr(ca.time, "sleep", lambda _s: real_sleep(0.05))
 
         collected: list = []
         stop = threading.Event()
@@ -811,18 +819,21 @@ class TestClaudeAnalyticsGaps:
 
         t = threading.Thread(target=collect, daemon=True)
         t.start()
-        _time.sleep(2.5)
+        # Wait until the initial event is yielded so known_session_ids is populated.
+        deadline = _time.time() + 3
+        while _time.time() < deadline and not collected:
+            _time.sleep(0.05)
+        # Age the file out of the window so it's removed on the next poll.
         old_time = _time.time() - 600
         os.utime(f, (old_time, old_time))
-        # Wait until removal yields, then keep the generator alive a bit so the
-        # post-yield lines (307-308) execute before we stop iteration.
-        deadline = _time.time() + 5
+        # Wait until removal yields, then keep the generator alive briefly so the
+        # post-yield lines (session_events.pop, changed = True) execute.
+        deadline = _time.time() + 3
         while _time.time() < deadline and not any(s.removed for s in collected):
-            _time.sleep(0.1)
-        # Give the generator a tick to run the post-yield body.
-        _time.sleep(0.5)
+            _time.sleep(0.05)
+        _time.sleep(0.2)
         stop.set()
-        t.join(timeout=5)
+        t.join(timeout=3)
 
         assert any(s.removed for s in collected)
 
@@ -1063,12 +1074,17 @@ class TestClaudeAnalyticsGaps:
 
         t = threading.Thread(target=collect, daemon=True)
         t.start()
-        # Wait until at least one switch yield happens (sess-a aggregate)
-        deadline = _time.time() + 6
+        # Wait until at least one switch yield happens (sess-a aggregate).
+        # The brooklet glob consumer's catch-up phase yields both events
+        # back-to-back, so the cross-session transition fires immediately.
+        deadline = _time.time() + 3
         while _time.time() < deadline and not collected:
-            _time.sleep(0.1)
+            _time.sleep(0.05)
         stop.set()
-        t.join(timeout=5)
+        # Don't join too long — the consumer thread is parked on a 0.5s
+        # queue.get() inside brooklet's glob+follow tail loop and will
+        # exit on the next loop iteration.
+        t.join(timeout=2)
 
         # The transition path (lines 348-350) executes when events flow from
         # sess-a to sess-b in the consumer stream.
