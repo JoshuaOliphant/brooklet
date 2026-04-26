@@ -71,3 +71,27 @@ class TestConfigure:
         # (or True if OTel happens to be installed — both are valid)
         result = otel.configure()
         assert isinstance(result, bool)
+
+    def test_configure_when_unavailable_returns_false(self, monkeypatch):
+        """When _OTEL_AVAILABLE is False, configure() returns False."""
+        monkeypatch.setattr(otel, "_OTEL_AVAILABLE", False)
+        monkeypatch.setattr(otel, "_configured", False)
+        assert otel.configure() is False
+
+    def test_configure_idempotent(self, monkeypatch):
+        """Already-configured returns True without rewiring."""
+        monkeypatch.setattr(otel, "_OTEL_AVAILABLE", True)
+        monkeypatch.setattr(otel, "_configured", True)
+        assert otel.configure() is True
+
+
+class TestMakeNoOpFallback:
+    """When the SDK is unavailable, _make_tracer/_make_meter return no-ops."""
+
+    def test_make_tracer_returns_noop_when_unavailable(self, monkeypatch):
+        monkeypatch.setattr(otel, "_OTEL_AVAILABLE", False)
+        assert isinstance(otel._make_tracer(), _NoOpTracer)
+
+    def test_make_meter_returns_noop_when_unavailable(self, monkeypatch):
+        monkeypatch.setattr(otel, "_OTEL_AVAILABLE", False)
+        assert isinstance(otel._make_meter(), _NoOpMeter)
