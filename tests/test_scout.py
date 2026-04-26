@@ -969,12 +969,12 @@ class TestClaudeAnalyticsGaps:
         """If stream.produce raises, the plugin prints a warning and continues."""
         from typer.testing import CliRunner
 
-        from brooklet.cli import app
+        from brooklet.cli.app import app
 
         def boom_produce(self, topic, event, **kwargs):
             raise OSError("simulated produce failure")
 
-        monkeypatch.setattr("brooklet.stream.Stream.produce", boom_produce)
+        monkeypatch.setattr("brooklet.core.stream.Stream.produce", boom_produce)
         runner = CliRunner()
         result = runner.invoke(
             app,
@@ -995,7 +995,7 @@ class TestClaudeAnalyticsGaps:
         """--dashboard routes through render_rich."""
         from typer.testing import CliRunner
 
-        from brooklet.cli import app
+        from brooklet.cli.app import app
         from brooklet.contrib import claude_analytics as ca
 
         called = {"n": 0}
@@ -1014,7 +1014,7 @@ class TestClaudeAnalyticsGaps:
         """KeyboardInterrupt during render is swallowed and exits cleanly."""
         from typer.testing import CliRunner
 
-        from brooklet.cli import app
+        from brooklet.cli.app import app
         from brooklet.contrib import claude_analytics as ca
 
         def boom_render(stats_iter):

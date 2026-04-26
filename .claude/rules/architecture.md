@@ -1,6 +1,6 @@
 ---
 paths:
-  - "src/brooklet/*.py"
+  - "src/brooklet/**/*.py"
 ---
 
 ## Architecture Decisions
@@ -16,14 +16,26 @@ Reference these when modifying core modules:
 
 See `docs/decisions/` for full rationale on each decision.
 
+## Package Layout
+
+Three subpackages, each a clear namespace boundary:
+
+- `core/` — primitives and the main read/write code paths
+- `storage/` — everything that persists state under `.brooklet/`
+- `cli/` — Typer app, plugin discovery, watch output formatting
+- `contrib/` — optional adapters (claude_analytics, pytest_analytics, otel)
+
 ## Module Responsibilities
 
-- `envelope.py` — `wrap()` on read, `serialize()` on write. Preserves existing `_ts` and `_src`; always sets `_seq`.
-- `offsets.py` — Byte offset persistence. One file per consumer group per topic.
-- `registry.py` — Maps topic names to file paths. Two kinds: external (registered) and local (produced).
-- `consumer.py` — Batch and follow-mode iterators. Uses watchdog for tailing.
-- `stream.py` — Orchestrator. The only module that coordinates the others.
-- `cli.py` — Unified CLI entry point. Typer app with core commands and plugin loading.
-- `types.py` — Shared type definitions (Mode, Event, offset dataclasses, SourceDef).
-- `plugins.py` — Plugin system using pluggy for CLI extensibility.
+- `core/envelope.py` — `wrap()` on read, `serialize()` on write. Preserves existing `_ts` and `_src`; always sets `_seq`.
+- `core/types.py` — Shared type definitions (Mode, Event, offset dataclasses, SourceDef).
+- `core/stream.py` — Orchestrator. The only module that coordinates the others.
+- `core/consumer.py` — Batch and follow-mode iterators. Uses watchdog for tailing.
+- `storage/offsets.py` — Byte offset persistence. One file per consumer group per topic.
+- `storage/sidecar.py` — Sequence number sidecar cache for O(1) next-seq lookups.
+- `storage/locking.py` — Topic-level file locking (flock) for single-writer enforcement.
+- `storage/registry.py` — Maps topic names to file paths. External (registered) and local (produced).
+- `cli/app.py` — Unified CLI entry point. Typer app with core commands and plugin loading. Exposed as `brooklet.cli:main` via the package `__init__` re-export.
+- `cli/plugins.py` — Plugin system using pluggy for CLI extensibility. `hookimpl` is imported from here.
+- `cli/watch_format.py` — One-line-per-event formatter for `brooklet watch`.
 - `__init__.py` — Public API surface. Exports `brooklet.open(path)`.

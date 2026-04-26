@@ -6,7 +6,7 @@ import logging
 
 import pytest
 
-from brooklet.consumer import Consumer
+from brooklet.core.consumer import Consumer
 
 
 class TestConsumerBatch:
@@ -69,7 +69,7 @@ class TestConsumerBatch:
 
     def test_consume_updates_offset_after_exhaustion(self, sample_jsonl, offsets_dir):
         """Offset is persisted when iterator is exhausted."""
-        from brooklet.offsets import load
+        from brooklet.storage.offsets import load
 
         consumer = Consumer(
             path=str(sample_jsonl),
@@ -287,7 +287,7 @@ class TestConsumerBatch:
 
         assert len(events) == 3
         # Offset should be saved after exiting context
-        from brooklet.offsets import load
+        from brooklet.storage.offsets import load
 
         offset = load(offsets_dir, group="test", topic="ctx")
         assert offset > 0
@@ -307,8 +307,8 @@ class TestConsumerBatch:
 
     def test_glob_segment_number_out_of_bounds_resets(self, tmp_path, offsets_dir, caplog):
         """Stale segment_number beyond file count resets to 0 with error."""
-        from brooklet.offsets import load, save
-        from brooklet.types import GlobOffset
+        from brooklet.core.types import GlobOffset
+        from brooklet.storage.offsets import load, save
 
         dir_ = tmp_path / "sessions"
         dir_.mkdir()
@@ -351,8 +351,8 @@ class TestConsumerBatch:
 
     def test_glob_file_removed_between_sessions(self, tmp_path, offsets_dir, caplog):
         """When files are removed between sessions, stale index is detected."""
-        from brooklet.offsets import load, save
-        from brooklet.types import GlobOffset
+        from brooklet.core.types import GlobOffset
+        from brooklet.storage.offsets import load, save
 
         dir_ = tmp_path / "sessions"
         dir_.mkdir()
@@ -402,8 +402,8 @@ class TestConsumerBatch:
 
     def test_glob_empty_files_with_stale_offset_resets(self, tmp_path, offsets_dir, caplog):
         """Stale offset with no matching files resets to 0 and logs error."""
-        from brooklet.offsets import load, save
-        from brooklet.types import GlobOffset
+        from brooklet.core.types import GlobOffset
+        from brooklet.storage.offsets import load, save
 
         dir_ = tmp_path / "empty_glob"
         dir_.mkdir()
@@ -443,8 +443,8 @@ class TestConsumerBatch:
         import threading
         import time
 
-        from brooklet.offsets import save
-        from brooklet.types import GlobOffset
+        from brooklet.core.types import GlobOffset
+        from brooklet.storage.offsets import save
 
         dir_ = tmp_path / "follow_stale"
         dir_.mkdir()
@@ -509,8 +509,8 @@ class TestConsumerOffsetSaveDurability:
 
     def test_glob_batch_saves_offset_on_exception_midway(self, tmp_path, offsets_dir):
         """Glob batch consumer must persist offset when iteration raises mid-flight."""
-        from brooklet.offsets import load
-        from brooklet.types import GlobOffset
+        from brooklet.core.types import GlobOffset
+        from brooklet.storage.offsets import load
 
         dir_ = tmp_path / "sessions"
         dir_.mkdir()
@@ -550,8 +550,8 @@ class TestConsumerOffsetSaveDurability:
     def test_glob_batch_saves_offset_without_explicit_close(self, tmp_path, offsets_dir):
         """Exhausting a glob batch iterator must save the offset via finally,
         even when the caller never calls close()."""
-        from brooklet.offsets import load
-        from brooklet.types import GlobOffset
+        from brooklet.core.types import GlobOffset
+        from brooklet.storage.offsets import load
 
         dir_ = tmp_path / "sessions"
         dir_.mkdir()
@@ -582,7 +582,7 @@ class TestConsumerOffsetSaveDurability:
     def test_single_file_batch_saves_offset_without_explicit_close(self, sample_jsonl, offsets_dir):
         """Exhausting a single-file iterator must save the offset via finally,
         even when the caller never calls close()."""
-        from brooklet.offsets import load
+        from brooklet.storage.offsets import load
 
         consumer = Consumer(
             path=str(sample_jsonl),
@@ -600,7 +600,7 @@ class TestConsumerOffsetSaveDurability:
     ):
         """If _save_offset raises, in-memory self._offset must NOT be clobbered,
         and the failure must surface on stderr (not just the null logger)."""
-        from brooklet.types import SingleFileOffset
+        from brooklet.core.types import SingleFileOffset
 
         consumer = Consumer(
             path=str(sample_jsonl),
@@ -674,7 +674,7 @@ class TestConsumerSegmentSearch:
 
     def test_segment_number_parsed_from_filename(self, tmp_path, offsets_dir):
         """Consumer correctly parses data-0003.jsonl as segment 3."""
-        from brooklet.consumer import _parse_segment_number
+        from brooklet.core.consumer import _parse_segment_number
 
         assert _parse_segment_number("data-0003.jsonl") == 3
         assert _parse_segment_number("/some/path/data-0001.jsonl") == 1
@@ -687,8 +687,8 @@ class TestConsumerSegmentSearch:
 
     def test_binary_search_finds_correct_segment(self, tmp_path, offsets_dir):
         """With segments 1, 3, 5 (gap at 2, 4), offset at segment_number=3 starts at segment 3."""
-        from brooklet.offsets import save
-        from brooklet.types import GlobOffset
+        from brooklet.core.types import GlobOffset
+        from brooklet.storage.offsets import save
 
         dir_ = tmp_path / "topic"
         dir_.mkdir()
@@ -717,8 +717,8 @@ class TestConsumerSegmentSearch:
 
     def test_missing_segment_starts_from_next(self, tmp_path, offsets_dir):
         """Offset at a deleted segment number starts reading from the next available segment."""
-        from brooklet.offsets import save
-        from brooklet.types import GlobOffset
+        from brooklet.core.types import GlobOffset
+        from brooklet.storage.offsets import save
 
         dir_ = tmp_path / "topic"
         dir_.mkdir()
@@ -747,8 +747,8 @@ class TestConsumerSegmentSearch:
 
     def test_fallback_to_positional_for_non_segment_files(self, tmp_path, offsets_dir):
         """Files like a.jsonl, b.jsonl that don't match data-NNNN.jsonl use positional indexing."""
-        from brooklet.offsets import save
-        from brooklet.types import GlobOffset
+        from brooklet.core.types import GlobOffset
+        from brooklet.storage.offsets import save
 
         dir_ = tmp_path / "external"
         dir_.mkdir()
@@ -776,8 +776,8 @@ class TestConsumerSegmentSearch:
 
     def test_segment_offset_stable_across_deletion(self, tmp_path, offsets_dir):
         """Delete segment 1 from [1,2,3], consumer at segment_number=2 still finds segment 2."""
-        from brooklet.offsets import save
-        from brooklet.types import GlobOffset
+        from brooklet.core.types import GlobOffset
+        from brooklet.storage.offsets import save
 
         dir_ = tmp_path / "topic"
         dir_.mkdir()

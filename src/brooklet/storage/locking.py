@@ -7,7 +7,7 @@ import os
 from collections.abc import Generator
 from pathlib import Path
 
-from brooklet.types import BrookletWriteLockError
+from brooklet.core.types import BrookletWriteLockError
 
 
 def _lock_path(brooklet_dir: Path, topic: str) -> Path:

@@ -5,13 +5,13 @@ import glob as glob_module
 import re
 from pathlib import Path
 
-from brooklet.consumer import Consumer
 from brooklet.contrib import otel
-from brooklet.envelope import serialize
-from brooklet.locking import topic_lock
-from brooklet.registry import Registry
-from brooklet.sidecar import derive_next_seq, read_next_seq, write_next_seq
-from brooklet.types import Mode
+from brooklet.core.consumer import Consumer
+from brooklet.core.envelope import serialize
+from brooklet.core.types import Mode
+from brooklet.storage.locking import topic_lock
+from brooklet.storage.registry import Registry
+from brooklet.storage.sidecar import derive_next_seq, read_next_seq, write_next_seq
 
 
 class Stream:

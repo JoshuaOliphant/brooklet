@@ -6,7 +6,7 @@ import json
 import pytest
 
 import brooklet
-from brooklet.envelope import serialize
+from brooklet.core.envelope import serialize
 
 # ---------------------------------------------------------------------------
 # serialize() tests (Step 1)

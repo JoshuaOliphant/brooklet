@@ -12,11 +12,11 @@ import pytest
 from typer.testing import CliRunner
 
 import brooklet
-from brooklet.cli import app
-from brooklet.consumer import Consumer
-from brooklet.offsets import save
-from brooklet.registry import Registry
-from brooklet.sidecar import derive_next_seq, write_next_seq
+from brooklet.cli.app import app
+from brooklet.core.consumer import Consumer
+from brooklet.storage.offsets import save
+from brooklet.storage.registry import Registry
+from brooklet.storage.sidecar import derive_next_seq, write_next_seq
 
 runner = CliRunner()
 
@@ -193,7 +193,7 @@ class TestStreamGaps:
 class TestWatchFormatGaps:
     def test_dict_with_none_value_is_skipped(self):
         """None values inside a top-level dict are skipped."""
-        from brooklet.watch_format import format_event
+        from brooklet.cli.watch_format import format_event
 
         event = {
             "_seq": 1,
@@ -207,7 +207,7 @@ class TestWatchFormatGaps:
 
     def test_dict_with_nested_dict_collapses(self):
         """Nested dict inside a top-level dict collapses to {...}."""
-        from brooklet.watch_format import format_event
+        from brooklet.cli.watch_format import format_event
 
         event = {
             "_seq": 1,
@@ -219,7 +219,7 @@ class TestWatchFormatGaps:
 
     def test_dict_with_nested_list_collapses(self):
         """Nested list inside a top-level dict collapses to [...]."""
-        from brooklet.watch_format import format_event
+        from brooklet.cli.watch_format import format_event
 
         event = {
             "_seq": 1,
@@ -279,7 +279,7 @@ class TestConsumerGaps:
         f2.write_text(json.dumps({"x": 2}) + "\n")
 
         # Save an offset that points to segment 2, so segment 1 is "skipped"
-        from brooklet.types import GlobOffset
+        from brooklet.core.types import GlobOffset
 
         save(offsets_dir, group="g", topic="t", offset=GlobOffset(2, 0).encode())
 
@@ -389,7 +389,7 @@ class TestConsumerGaps:
         """_drain_queue removes every item from a queue with a single producer."""
         import queue
 
-        from brooklet.consumer import _drain_queue
+        from brooklet.core.consumer import _drain_queue
 
         q: queue.Queue = queue.Queue()
         for i in range(5):
@@ -488,7 +488,7 @@ class TestCliGaps:
         def boom_produce(self, topic, event, **kwargs):
             raise OSError("simulated produce failure")
 
-        monkeypatch.setattr("brooklet.stream.Stream.produce", boom_produce)
+        monkeypatch.setattr("brooklet.core.stream.Stream.produce", boom_produce)
         result = runner.invoke(
             app,
             ["produce", "topic", "--stream-dir", str(tmp_path)],
@@ -521,7 +521,7 @@ class TestCliGaps:
         """Long format-error messages are truncated to ~80 chars in the fallback line."""
         import io
 
-        from brooklet.cli import _watch_impl
+        from brooklet.cli.app import _watch_impl
 
         long_msg = "A" * 200
 
@@ -559,7 +559,7 @@ class TestCliGaps:
 
     def test_load_plugins_warns_on_failure(self, capsys, monkeypatch):
         """If plugin loading raises ImportError, a warning is emitted on stderr."""
-        from brooklet import cli as cli_mod
+        import brooklet.cli.app as cli_mod
 
         class BoomPM:
             class hook:  # noqa: N801 — pluggy uses lowercase 'hook' attribute
@@ -574,7 +574,7 @@ class TestCliGaps:
 
     def test_main_invokes_app(self, monkeypatch):
         """main() opens a tracing span and invokes the typer app."""
-        from brooklet import cli as cli_mod
+        import brooklet.cli.app as cli_mod
 
         called = {}
 
@@ -594,7 +594,7 @@ class TestCliGaps:
         def boom_consume(self, topic, group, follow=False):
             raise KeyboardInterrupt
 
-        monkeypatch.setattr("brooklet.stream.Stream.consume", boom_consume)
+        monkeypatch.setattr("brooklet.core.stream.Stream.consume", boom_consume)
         result = runner.invoke(
             app,
             ["watch", "topic", "--stream-dir", str(tmp_path), "--group", "watcher"],
@@ -621,7 +621,7 @@ class TestCliGaps:
         def fake_consume(self, topic, group, follow=False):
             return FakeConsumer([{"_seq": 1, "_ts": "2026-04-10T14:03:22Z", "x": 1}])
 
-        monkeypatch.setattr("brooklet.stream.Stream.consume", fake_consume)
+        monkeypatch.setattr("brooklet.core.stream.Stream.consume", fake_consume)
         result = runner.invoke(
             app,
             ["watch", "topic", "--stream-dir", str(tmp_path), "--group", "watcher"],
@@ -652,7 +652,7 @@ class TestCliGaps:
         def boom_consume(self, topic, group, follow=False):
             raise KeyError(topic)
 
-        monkeypatch.setattr("brooklet.stream.Stream.consume", boom_consume)
+        monkeypatch.setattr("brooklet.core.stream.Stream.consume", boom_consume)
 
         TyperRunner().invoke(app, ["watch", "missing", "--stream-dir", "."])
 

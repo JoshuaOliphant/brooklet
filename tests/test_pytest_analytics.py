@@ -353,7 +353,7 @@ class TestMainCLI:
     def test_single_file_prints_output(self, tmp_path):
         from typer.testing import CliRunner
 
-        from brooklet.cli import app
+        from brooklet.cli.app import app
 
         runner = CliRunner()
         reports_dir = tmp_path / "reports"
@@ -369,7 +369,7 @@ class TestMainCLI:
     def test_glob_mode_prints_multiple_runs(self, tmp_path):
         from typer.testing import CliRunner
 
-        from brooklet.cli import app
+        from brooklet.cli.app import app
 
         runner = CliRunner()
         reports_dir = tmp_path / "reports"
@@ -387,7 +387,7 @@ class TestMainCLI:
     def test_output_flag_produces_to_topic(self, tmp_path):
         from typer.testing import CliRunner
 
-        from brooklet.cli import app
+        from brooklet.cli.app import app
 
         runner = CliRunner()
         reports_dir = tmp_path / "reports"
@@ -415,7 +415,7 @@ class TestMainCLI:
     def test_missing_file_exits_with_error(self, tmp_path):
         from typer.testing import CliRunner
 
-        from brooklet.cli import app
+        from brooklet.cli.app import app
 
         runner = CliRunner()
         result = runner.invoke(app, ["pytest", "scan", str(tmp_path / "nope.jsonl")])
@@ -503,7 +503,7 @@ class TestPytestAnalyticsGaps:
         """If stream.produce raises, the plugin prints a warning and continues."""
         from typer.testing import CliRunner
 
-        from brooklet.cli import app
+        from brooklet.cli.app import app
 
         report = tmp_path / "report.jsonl"
         write_run_file(tmp_path, "report", ALL_PASS_EVENTS)
@@ -511,7 +511,7 @@ class TestPytestAnalyticsGaps:
         def boom_produce(self, topic, event, **kwargs):
             raise OSError("simulated produce failure")
 
-        monkeypatch.setattr("brooklet.stream.Stream.produce", boom_produce)
+        monkeypatch.setattr("brooklet.core.stream.Stream.produce", boom_produce)
         runner = CliRunner()
         result = runner.invoke(
             app,
@@ -532,7 +532,7 @@ class TestPytestAnalyticsGaps:
         """KeyboardInterrupt mid-scan still emits cumulative totals if any runs collected."""
         from typer.testing import CliRunner
 
-        from brooklet.cli import app
+        from brooklet.cli.app import app
         from brooklet.contrib import pytest_analytics as pa
         from brooklet.contrib.pytest_analytics import RunStats
 
@@ -556,7 +556,7 @@ class TestPytestAnalyticsGaps:
         """BrokenPipeError during scan is swallowed silently (e.g. piped to head)."""
         from typer.testing import CliRunner
 
-        from brooklet.cli import app
+        from brooklet.cli.app import app
         from brooklet.contrib import pytest_analytics as pa
 
         write_run_file(tmp_path, "report", ALL_PASS_EVENTS)
@@ -574,7 +574,7 @@ class TestPytestAnalyticsGaps:
         """ValueError during scan exits non-zero with an error message."""
         from typer.testing import CliRunner
 
-        from brooklet.cli import app
+        from brooklet.cli.app import app
         from brooklet.contrib import pytest_analytics as pa
 
         write_run_file(tmp_path, "report", ALL_PASS_EVENTS)
@@ -593,7 +593,7 @@ class TestPytestAnalyticsGaps:
         """Single-file mode with non-existent path exits 1."""
         from typer.testing import CliRunner
 
-        from brooklet.cli import app
+        from brooklet.cli.app import app
 
         runner = CliRunner()
         result = runner.invoke(app, ["pytest", "scan", str(tmp_path / "ghost.jsonl")])

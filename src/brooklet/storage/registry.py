@@ -9,7 +9,7 @@ import tempfile
 from pathlib import Path
 from typing import get_args
 
-from brooklet.types import Mode, SourceDef
+from brooklet.core.types import Mode, SourceDef
 
 VALID_MODES: set[str] = set(get_args(Mode))
 

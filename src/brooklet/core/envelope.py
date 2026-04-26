@@ -5,7 +5,7 @@ import json
 import logging
 from datetime import UTC, datetime
 
-from brooklet.types import Event
+from brooklet.core.types import Event
 
 logger = logging.getLogger("brooklet")
 

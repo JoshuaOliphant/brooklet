@@ -1,7 +1,7 @@
 # ABOUTME: Unit tests for the pure compact-line formatter used by `brooklet watch`
 # ABOUTME: Validates Monitor-compatible one-line-per-event output shape
 
-from brooklet.watch_format import format_event
+from brooklet.cli.watch_format import format_event
 
 
 def test_format_basic_event():

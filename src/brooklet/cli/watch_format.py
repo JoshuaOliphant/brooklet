@@ -6,7 +6,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from brooklet.types import Event
+from brooklet.core.types import Event
 
 _ENVELOPE_FIELDS = frozenset({"_ts", "_seq", "_src"})
 _TIME_FALLBACK = "??:??:??"

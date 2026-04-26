@@ -25,7 +25,7 @@ dependencies = [
 ]
 
 [project.scripts]
-brooklet = "brooklet.cli:main"
+brooklet = "brooklet.cli.app:main"
 
 [project.urls]
 Repository = "https://github.com/joshuaoliphant/brooklet"

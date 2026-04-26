@@ -3,7 +3,7 @@
 
 import json
 
-from brooklet.envelope import wrap
+from brooklet.core.envelope import wrap
 
 
 class TestWrap:
