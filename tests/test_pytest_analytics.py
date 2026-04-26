@@ -353,7 +353,7 @@ class TestMainCLI:
     def test_single_file_prints_output(self, tmp_path):
         from typer.testing import CliRunner
 
-        from brooklet.cli import app
+        from brooklet.cli.app import app
 
         runner = CliRunner()
         reports_dir = tmp_path / "reports"
@@ -369,7 +369,7 @@ class TestMainCLI:
     def test_glob_mode_prints_multiple_runs(self, tmp_path):
         from typer.testing import CliRunner
 
-        from brooklet.cli import app
+        from brooklet.cli.app import app
 
         runner = CliRunner()
         reports_dir = tmp_path / "reports"
@@ -387,7 +387,7 @@ class TestMainCLI:
     def test_output_flag_produces_to_topic(self, tmp_path):
         from typer.testing import CliRunner
 
-        from brooklet.cli import app
+        from brooklet.cli.app import app
 
         runner = CliRunner()
         reports_dir = tmp_path / "reports"
@@ -415,7 +415,7 @@ class TestMainCLI:
     def test_missing_file_exits_with_error(self, tmp_path):
         from typer.testing import CliRunner
 
-        from brooklet.cli import app
+        from brooklet.cli.app import app
 
         runner = CliRunner()
         result = runner.invoke(app, ["pytest", "scan", str(tmp_path / "nope.jsonl")])

@@ -14,7 +14,7 @@ import pytest
 from typer.testing import CliRunner
 
 import brooklet
-from brooklet.cli import _watch_impl, app
+from brooklet.cli.app import _watch_impl, app
 
 runner = CliRunner()
 

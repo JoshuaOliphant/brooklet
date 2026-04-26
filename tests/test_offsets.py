@@ -3,7 +3,7 @@
 
 import pytest
 
-from brooklet.offsets import load, save
+from brooklet.storage.offsets import load, save
 
 
 class TestOffsets:

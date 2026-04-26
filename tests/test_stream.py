@@ -6,7 +6,7 @@ import os
 import warnings
 
 import brooklet
-from brooklet.stream import Stream
+from brooklet.core.stream import Stream
 
 
 class TestStream:

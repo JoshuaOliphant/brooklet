@@ -6,7 +6,7 @@ import json
 from typer.testing import CliRunner
 
 import brooklet
-from brooklet.cli import app
+from brooklet.cli.app import app
 
 runner = CliRunner()
 

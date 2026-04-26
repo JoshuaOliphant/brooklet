@@ -1,7 +1,7 @@
 # ABOUTME: Tests for shared type definitions
 # ABOUTME: Verifies offset encode/decode roundtrips and edge cases
 
-from brooklet.types import GlobOffset, SingleFileOffset
+from brooklet.core.types import GlobOffset, SingleFileOffset
 
 
 class TestSingleFileOffset:

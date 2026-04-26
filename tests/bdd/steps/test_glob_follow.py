@@ -8,7 +8,7 @@ import time
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from brooklet.consumer import Consumer
+from brooklet.core.consumer import Consumer
 
 scenarios("../features/glob_follow.feature")
 

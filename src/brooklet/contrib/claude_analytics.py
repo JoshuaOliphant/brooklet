@@ -16,7 +16,7 @@ from typing import Annotated
 import typer
 
 import brooklet
-from brooklet.plugins import hookimpl
+from brooklet.cli.plugins import hookimpl
 
 # ---------------------------------------------------------------------------
 # Layer 1: Parsing (pure functions, no I/O)

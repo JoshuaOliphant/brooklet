@@ -14,7 +14,7 @@ from typing import Annotated
 import typer
 
 import brooklet
-from brooklet.plugins import hookimpl
+from brooklet.cli.plugins import hookimpl
 
 _logger = logging.getLogger("brooklet.contrib.otel")
 

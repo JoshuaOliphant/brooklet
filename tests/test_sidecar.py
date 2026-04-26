@@ -3,7 +3,7 @@
 
 import json
 
-from brooklet.sidecar import derive_next_seq, read_next_seq, write_next_seq
+from brooklet.storage.sidecar import derive_next_seq, read_next_seq, write_next_seq
 
 
 def test_read_missing_sidecar_returns_none(tmp_path):

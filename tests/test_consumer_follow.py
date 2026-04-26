@@ -6,7 +6,7 @@ import logging
 import threading
 import time
 
-from brooklet.consumer import Consumer
+from brooklet.core.consumer import Consumer
 
 
 class TestConsumerFollow:
@@ -88,7 +88,7 @@ class TestConsumerFollow:
 
     def test_follow_saves_offset_on_close(self, sample_jsonl, offsets_dir):
         """Offset is persisted when follow consumer is closed."""
-        from brooklet.offsets import load
+        from brooklet.storage.offsets import load
 
         events_seen = []
 
@@ -195,7 +195,7 @@ class TestConsumerFollow:
 
     def test_glob_follow_offset_persistence(self, tmp_path, offsets_dir):
         """Glob+follow resumes from saved offset after restart."""
-        from brooklet.offsets import load
+        from brooklet.storage.offsets import load
 
         d = tmp_path / "sessions"
         d.mkdir()

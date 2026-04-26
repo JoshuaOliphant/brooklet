@@ -4,8 +4,8 @@
 import multiprocessing
 from pathlib import Path
 
-from brooklet.locking import acquire_topic_lock, release_topic_lock, topic_lock
-from brooklet.types import BrookletWriteLockError
+from brooklet.core.types import BrookletWriteLockError
+from brooklet.storage.locking import acquire_topic_lock, release_topic_lock, topic_lock
 
 
 def test_lock_file_created_on_acquire(tmp_path: Path) -> None:

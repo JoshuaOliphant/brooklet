@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 import brooklet
-from brooklet.types import BrookletWriteLockError
+from brooklet.core.types import BrookletWriteLockError
 
 
 class TestSegmentCreation:
@@ -92,7 +92,7 @@ class TestSidecar:
 
     def test_produce_sidecar_updated(self, tmp_path):
         """After producing, sidecar has correct next_seq."""
-        from brooklet.sidecar import read_next_seq
+        from brooklet.storage.sidecar import read_next_seq
 
         s = brooklet.open(str(tmp_path / "streams"))
         brooklet_dir = tmp_path / "streams" / ".brooklet"
@@ -191,7 +191,7 @@ class TestLockContention:
 import sys
 sys.path.insert(0, '{Path(__file__).parents[1] / "src"}')
 from pathlib import Path
-from brooklet.locking import acquire_topic_lock, release_topic_lock
+from brooklet.storage.locking import acquire_topic_lock, release_topic_lock
 import time
 brooklet_dir = Path('{brooklet_dir}')
 fd = acquire_topic_lock(brooklet_dir, 'locked-topic')

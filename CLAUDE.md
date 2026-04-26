@@ -6,18 +6,26 @@ Lightweight JSONL-based event streaming library. Adds consumer coordination (off
 
 Brooklet is a **consumer coordination layer**, not a message broker. External tools write JSONL; brooklet reads it with offset tracking.
 
-### Core Modules
-- `envelope.py` — Metadata injection (_ts, _seq, _src): `wrap()` on read, `serialize()` on write
-- `offsets.py` — Byte offset persistence per consumer group
-- `registry.py` — Maps topic names to sources; supports external (registered) and local (produced)
-- `consumer.py` — Batch and follow-mode iterators over JSONL files
-- `stream.py` — Orchestrator: `register()`, `produce()`, `consume()`, `topics()`. Segment rotation + sidecar + flock
-- `locking.py` — Topic-level file locking via `fcntl.flock(LOCK_EX|LOCK_NB)` for single-writer enforcement
-- `sidecar.py` — Sequence number sidecar cache for O(1) next-seq lookups with crash recovery
-- `cli.py` — Unified CLI entry point; Typer app with core commands and plugin loading
-- `types.py` — Shared type definitions (Mode, Event, offset dataclasses, SourceDef)
-- `plugins.py` — Plugin system using pluggy for CLI extensibility
+Source layout uses three subpackages so directory names communicate intent (the "namespaces are one honking great idea" principle applied to layout — directory paths are an interface for both humans and LLM tools).
+
 - `__init__.py` — Public API: `brooklet.open(path)`
+
+#### `core/` — primitives + main code paths
+- `core/envelope.py` — Metadata injection (_ts, _seq, _src): `wrap()` on read, `serialize()` on write
+- `core/types.py` — Shared type definitions (Mode, Event, offset dataclasses, SourceDef)
+- `core/stream.py` — Orchestrator: `register()`, `produce()`, `consume()`, `topics()`. Segment rotation + sidecar + flock
+- `core/consumer.py` — Batch and follow-mode iterators over JSONL files
+
+#### `storage/` — persistence layer (everything under `.brooklet/`)
+- `storage/offsets.py` — Byte offset persistence per consumer group
+- `storage/sidecar.py` — Sequence number sidecar cache for O(1) next-seq lookups with crash recovery
+- `storage/locking.py` — Topic-level file locking via `fcntl.flock(LOCK_EX|LOCK_NB)` for single-writer enforcement
+- `storage/registry.py` — Maps topic names to sources; supports external (registered) and local (produced)
+
+#### `cli/` — Typer app and plugin loading
+- `cli/app.py` — Unified CLI entry point; Typer app with core commands and plugin loading. Re-exported as `brooklet.cli:main` (the package's `__init__.py` re-exports `app`, `main`, `_watch_impl`).
+- `cli/plugins.py` — Plugin system using pluggy for CLI extensibility (`hookimpl` lives here)
+- `cli/watch_format.py` — One-line-per-event formatter for `brooklet watch`
 
 ### Contrib Adapters (3-layer pattern: parsing → consumer integration → CLI)
 - `contrib/claude_analytics.py` — Claude Code session analytics (`brooklet scout scan`)

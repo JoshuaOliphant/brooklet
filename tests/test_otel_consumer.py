@@ -9,7 +9,7 @@ import logging
 import pytest
 from typer.testing import CliRunner
 
-from brooklet.cli import app
+from brooklet.cli.app import app
 from brooklet.contrib.otel_consumer import (
     parse_log_event,
     parse_metric_event,

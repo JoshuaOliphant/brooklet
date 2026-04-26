@@ -13,9 +13,9 @@ from collections.abc import Iterator
 from pathlib import Path
 
 from brooklet.contrib import otel
-from brooklet.envelope import wrap
-from brooklet.offsets import load, save
-from brooklet.types import Event, GlobOffset, Mode, SingleFileOffset
+from brooklet.core.envelope import wrap
+from brooklet.core.types import Event, GlobOffset, Mode, SingleFileOffset
+from brooklet.storage.offsets import load, save
 
 logger = logging.getLogger("brooklet")
 

@@ -3,7 +3,7 @@
 
 import pytest
 
-from brooklet.registry import Registry
+from brooklet.storage.registry import Registry
 
 
 class TestRegistry:

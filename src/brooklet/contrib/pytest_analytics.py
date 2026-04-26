@@ -13,8 +13,8 @@ from typing import Annotated
 import typer
 
 import brooklet
-from brooklet.plugins import hookimpl
-from brooklet.types import Mode
+from brooklet.cli.plugins import hookimpl
+from brooklet.core.types import Mode
 
 RECOGNIZED_REPORT_TYPES = {"SessionStart", "CollectReport", "TestReport", "SessionFinish"}
 

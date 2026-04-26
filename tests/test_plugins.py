@@ -5,7 +5,7 @@ import pytest
 import typer
 from typer.testing import CliRunner
 
-from brooklet.plugins import (  # noqa: F401
+from brooklet.cli.plugins import (  # noqa: F401
     BrookletSpec,
     get_plugin_manager,
     hookimpl,
@@ -75,7 +75,7 @@ def test_scout_plugin_registers_commands():
 
 
 def test_scout_scan_delegates_to_scan_sessions(session_dir):
-    from brooklet.cli import app
+    from brooklet.cli.app import app
 
     result = runner.invoke(app, ["scout", "scan", str(session_dir)])
     assert result.exit_code == 0
@@ -85,7 +85,7 @@ def test_scout_scan_delegates_to_scan_sessions(session_dir):
 def test_scout_scan_output_uses_stream_dir(session_dir, tmp_path):
     """scout scan --output writes to --stream-dir, not the sessions directory."""
     import brooklet
-    from brooklet.cli import app
+    from brooklet.cli.app import app
 
     stream_dir = tmp_path / "streams"
     stream_dir.mkdir()
@@ -118,7 +118,7 @@ def test_scout_scan_output_uses_stream_dir(session_dir, tmp_path):
 def test_pytest_scan_output_uses_stream_dir(tmp_path):
     """pytest scan --output writes to --stream-dir, not the report file's parent."""
     import brooklet
-    from brooklet.cli import app
+    from brooklet.cli.app import app
     from tests.pytest_fixtures import SINGLE_RUN_EVENTS, write_run_file
 
     report_dir = tmp_path / "reports"
@@ -149,7 +149,7 @@ def test_pytest_scan_output_uses_stream_dir(tmp_path):
 
 def test_cli_help_shows_core_and_plugin_commands():
     """brooklet --help shows core commands and plugin subcommands."""
-    from brooklet.cli import app
+    from brooklet.cli.app import app
 
     result = runner.invoke(app, ["--help"])
     assert result.exit_code == 0

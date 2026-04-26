@@ -14,10 +14,10 @@ import pluggy
 import typer
 
 import brooklet
+from brooklet.cli.plugins import get_plugin_manager
+from brooklet.cli.watch_format import format_event
 from brooklet.contrib import otel
-from brooklet.plugins import get_plugin_manager
-from brooklet.types import Event, Mode
-from brooklet.watch_format import format_event
+from brooklet.core.types import Event, Mode
 
 
 def _version_callback(value: bool) -> None:
@@ -238,7 +238,7 @@ def cat(
 
     import glob as glob_module
 
-    from brooklet.envelope import wrap
+    from brooklet.core.envelope import wrap
 
     file_path = source["path"]
     file_mode = source["mode"]
