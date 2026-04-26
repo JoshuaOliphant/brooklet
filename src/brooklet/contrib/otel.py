@@ -24,10 +24,8 @@ try:
     from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
     _OTEL_AVAILABLE = True
-except ImportError:
-    # Clean up any partially-imported names from a broken install
-    _metrics_api = None
-    _trace_api = None
+except ImportError:  # pragma: no cover — only hit when OTel SDK is absent
+    pass
 
 
 # ---------------------------------------------------------------------------
@@ -114,8 +112,7 @@ def configure(endpoint: str = "http://127.0.0.1:4318") -> bool:
 
     if not _OTEL_AVAILABLE:
         _logger.debug(
-            "OTel SDK not available — instrumentation disabled. "
-            "Install with: uv sync --group otel"
+            "OTel SDK not available — instrumentation disabled. Install with: uv sync --group otel"
         )
         return False
 

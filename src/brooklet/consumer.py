@@ -21,6 +21,17 @@ logger = logging.getLogger("brooklet")
 
 _OBSERVER_JOIN_TIMEOUT = 5
 
+
+def _drain_queue(q) -> None:
+    """Empty a queue with a single producer (watchdog handler).
+
+    Used to coalesce a burst of filesystem-event notifications so the
+    consumer reads the file once instead of once per notification.
+    """
+    while not q.empty():
+        q.get_nowait()
+
+
 # Matches local segment filenames produced by brooklet (e.g. data-0003.jsonl)
 _SEGMENT_RE = re.compile(r"data-(\d+)\.jsonl$")
 
@@ -430,13 +441,12 @@ class Consumer:
                             pass
                     continue
 
-                # Drain the queue to batch process notifications
+                # Drain the queue to batch process notifications. The queue
+                # only has one producer (the watchdog handler), so empty() is
+                # reliable here — get_nowait() cannot race against a remover.
                 pending = [(action, filepath)]
                 while not event_queue.empty():
-                    try:
-                        pending.append(event_queue.get_nowait())
-                    except queue.Empty:
-                        break
+                    pending.append(event_queue.get_nowait())
 
                 for _action, filepath in pending:
                     known_pos = self._file_positions.get(filepath, 0)
@@ -502,12 +512,7 @@ class Consumer:
                 with contextlib.suppress(queue.Empty):
                     event_queue.get(timeout=0.5)
 
-                # Drain the queue (multiple notifications may have arrived)
-                while not event_queue.empty():
-                    try:
-                        event_queue.get_nowait()
-                    except queue.Empty:
-                        break
+                _drain_queue(event_queue)
 
                 yield from self._read_lines(f)
         finally:
@@ -518,15 +523,11 @@ class Consumer:
         self._closed = True
 
         try:
-            # Save offset from current file position if still open
+            # Save offset from current file position if still open.
+            # _file_handle is only set in single-file mode — glob-mode
+            # sub-generators keep their own local handles.
             if self._file_handle is not None and not self._file_handle.closed:
-                if isinstance(self._offset, GlobOffset):
-                    self._offset = GlobOffset(
-                        segment_number=self._offset.segment_number,
-                        byte_offset=self._file_handle.tell(),
-                    )
-                else:
-                    self._offset = SingleFileOffset(byte_offset=self._file_handle.tell())
+                self._offset = SingleFileOffset(byte_offset=self._file_handle.tell())
                 self._save_offset()
             elif isinstance(self._offset, GlobOffset) and self._offset.encode() > 0:
                 # Glob-mode consumers track progress via self._offset rather than

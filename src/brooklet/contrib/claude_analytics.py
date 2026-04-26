@@ -327,7 +327,12 @@ def scan_sessions(
         return
 
     if follow:
-        # Use brooklet glob+follow for tailing
+        # Use brooklet glob+follow for tailing. The consumer iterates forever
+        # until the generator is closed (which raises GeneratorExit), so any
+        # unflushed `current_events` at shutdown can't be yielded — Python
+        # forbids yielding during GeneratorExit unwinding. We therefore yield
+        # eagerly on every cross-session transition and accept that the final
+        # session's tail is lost on shutdown.
         glob_pattern = str(session_dir / "*.jsonl")
         stream = brooklet.open(str(session_dir))
         stream.register("sessions", glob_pattern, "glob")
@@ -352,10 +357,6 @@ def scan_sessions(
                 parsed = parse_session_event(raw_event)
                 if parsed is not None:
                     current_events.append(parsed)
-
-            # Yield remaining events
-            if current_events and current_file:
-                yield aggregate_session(current_file, current_events)
     else:
         # Batch mode: read each file directly for simplicity and reliability
         for filepath in jsonl_files:

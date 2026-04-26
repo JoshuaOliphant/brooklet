@@ -366,3 +366,136 @@ class TestOtelCLI:
         assert "traces" in result.output
         assert "metrics" in result.output
         assert "logs" in result.output
+
+
+# ---------------------------------------------------------------------------
+# Coverage gaps: follow mode + edge cases
+# ---------------------------------------------------------------------------
+
+
+class TestOtelConsumerGaps:
+    def test_iter_jsonl_skips_blank_lines(self, tmp_path):
+        """Blank lines in a JSONL file are silently skipped."""
+        from brooklet.contrib.otel_consumer import _iter_jsonl
+
+        f = tmp_path / "blanks.jsonl"
+        f.write_text('\n\n{"a": 1}\n\n{"b": 2}\n\n')
+        events = list(_iter_jsonl(str(f)))
+        assert len(events) == 2
+
+    def test_iter_jsonl_warns_on_oserror(self, tmp_path, caplog, monkeypatch):
+        """If the file open fails, a warning is logged and iteration ends."""
+        import builtins
+
+        from brooklet.contrib.otel_consumer import _iter_jsonl
+
+        original_open = builtins.open
+
+        def boom_open(path, *args, **kwargs):
+            if "blowup" in str(path):
+                raise OSError("simulated read failure")
+            return original_open(path, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "open", boom_open)
+        with caplog.at_level("WARNING", logger="brooklet.contrib.otel"):
+            events = list(_iter_jsonl(str(tmp_path / "blowup.jsonl")))
+        assert events == []
+        assert "failed to read JSONL file" in caplog.text
+
+    def test_render_trace_includes_attributes(self):
+        """When span has attributes, _render_trace appends them as key=val pairs."""
+        from brooklet.contrib.otel_consumer import _render_trace
+
+        span = {
+            "name": "produce",
+            "is_root": True,
+            "parent_span_id": "",
+            "duration_ms": 1.5,
+            "status": "ok",
+            "attributes": {"brooklet.topic": "events"},
+        }
+        line = _render_trace(span)
+        assert "brooklet.topic=events" in line
+
+    def test_scan_traces_follow_mode(self, tmp_path):
+        """Follow mode for traces: register glob source and yield parsed events."""
+        from brooklet.contrib.otel_consumer import scan_traces
+
+        traces_dir = tmp_path / "traces"
+        traces_dir.mkdir()
+        write_traces_file(
+            traces_dir,
+            "2026-04-18",
+            [make_root_trace_event(name="follow-trace")],
+        )
+
+        results: list = []
+        gen = scan_traces(
+            harness_dir=str(tmp_path),
+            stream_dir=str(tmp_path / "stream"),
+            follow=True,
+            group="follow-traces",
+        )
+
+        # Pull just the existing event then break out of the generator
+        for r in gen:
+            results.append(r)
+            break
+        gen.close()
+
+        assert len(results) == 1
+        assert results[0]["name"] == "follow-trace"
+
+    def test_scan_metrics_follow_mode(self, tmp_path):
+        """Follow mode for metrics: register glob source and yield parsed events."""
+        from brooklet.contrib.otel_consumer import scan_metrics
+
+        metrics_dir = tmp_path / "metrics"
+        metrics_dir.mkdir()
+        write_metrics_file(
+            metrics_dir,
+            "2026-04-18",
+            [make_metric_event(name="follow.metric", value=1.0)],
+        )
+
+        results: list = []
+        gen = scan_metrics(
+            harness_dir=str(tmp_path),
+            stream_dir=str(tmp_path / "stream"),
+            follow=True,
+            group="follow-metrics",
+        )
+        for r in gen:
+            results.append(r)
+            break
+        gen.close()
+
+        assert len(results) == 1
+        assert results[0]["name"] == "follow.metric"
+
+    def test_scan_logs_follow_mode(self, tmp_path):
+        """Follow mode for logs: register glob source and yield parsed events."""
+        from brooklet.contrib.otel_consumer import scan_logs
+
+        logs_dir = tmp_path / "logs"
+        logs_dir.mkdir()
+        write_logs_file(
+            logs_dir,
+            "2026-04-18",
+            [make_log_event(message="follow-log")],
+        )
+
+        results: list = []
+        gen = scan_logs(
+            harness_dir=str(tmp_path),
+            stream_dir=str(tmp_path / "stream"),
+            follow=True,
+            group="follow-logs",
+        )
+        for r in gen:
+            results.append(r)
+            break
+        gen.close()
+
+        assert len(results) == 1
+        assert results[0]["message"] == "follow-log"

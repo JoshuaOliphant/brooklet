@@ -44,6 +44,11 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP", "B", "C4", "SIM"]
 
+[tool.coverage.run]
+# Enable thread tracing — many code paths (consumer follow, scan_sessions
+# follow) only execute on background threads.
+concurrency = ["thread"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [

@@ -32,3 +32,4 @@ CLAUDE.local.md
 .claude/harness/observability/pids/
 .claude/harness/observability/logs/
 .claude/harness/observability/data/
+.coverage

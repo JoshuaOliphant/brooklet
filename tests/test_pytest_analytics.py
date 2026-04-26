@@ -420,3 +420,182 @@ class TestMainCLI:
         runner = CliRunner()
         result = runner.invoke(app, ["pytest", "scan", str(tmp_path / "nope.jsonl")])
         assert result.exit_code == 1
+
+
+# ---------------------------------------------------------------------------
+# Coverage gaps: helpers, follow mode, formatting, plugin error paths
+# ---------------------------------------------------------------------------
+
+
+class TestPytestAnalyticsGaps:
+    def test_topic_for_path_uses_short_hash(self, tmp_path):
+        """_topic_for_path returns 'pytest/<8-char-hash>'."""
+        from brooklet.contrib.pytest_analytics import _topic_for_path
+
+        report = tmp_path / "report.jsonl"
+        report.write_text("")
+        topic = _topic_for_path(str(report))
+        assert topic.startswith("pytest/")
+        assert len(topic.split("/")[1]) == 8
+
+    def test_parse_file_events_skips_blank_lines(self, tmp_path):
+        """Blank lines in a JSONL report are silently skipped."""
+        from brooklet.contrib.pytest_analytics import _parse_file_events
+
+        report = tmp_path / "report.jsonl"
+        report.write_text(
+            '\n\n{"$report_type": "TestReport", "nodeid": "x", "outcome": "passed",'
+            ' "when": "call", "duration": 0.001}\n\n'
+        )
+        events = _parse_file_events(str(report))
+        assert len(events) == 1
+
+    def test_parse_file_events_warns_on_malformed_lines(self, tmp_path, capsys):
+        """Malformed JSON lines are skipped and a warning is printed."""
+        from brooklet.contrib.pytest_analytics import _parse_file_events
+
+        report = tmp_path / "report.jsonl"
+        report.write_text(
+            "NOT-JSON\n" + '{"$report_type": "TestReport", "nodeid": "x", "outcome": "passed",'
+            ' "when": "call", "duration": 0.001}\n'
+        )
+        events = _parse_file_events(str(report))
+        assert len(events) == 1
+        captured = capsys.readouterr()
+        assert "lines failed JSON parsing" in captured.err
+
+    def test_format_duration_branches(self):
+        """_format_duration covers ms, seconds, and minutes branches."""
+        from brooklet.contrib.pytest_analytics import _format_duration
+
+        assert "ms" in _format_duration(0.5)
+        assert _format_duration(1.5).endswith("s")
+        assert _format_duration(120.0).endswith("m")
+
+    def test_scan_runs_follow_yields_running_aggregates(self, tmp_path):
+        """Follow mode opens a brooklet consumer and yields aggregates per event."""
+        report = tmp_path / "report.jsonl"
+        report.write_text(
+            '{"$report_type": "TestReport", "nodeid": "x", "outcome": "passed",'
+            ' "when": "call", "duration": 0.001}\n'
+        )
+
+        gen = scan_runs(path=str(report), mode="single-file", follow=True)
+        # Pull one aggregate from the generator (the existing event)
+        first = next(gen)
+        gen.close()
+        assert first.run_id == "report"
+        assert first.total == 1
+
+    def test_scan_runs_invalid_mode_raises(self, tmp_path):
+        from brooklet.contrib.pytest_analytics import scan_runs as _scan
+
+        with pytest.raises(ValueError, match="mode must be one of"):
+            list(_scan(path=str(tmp_path / "x"), mode="other"))
+
+    def test_scan_runs_missing_single_file_raises(self, tmp_path):
+        from brooklet.contrib.pytest_analytics import scan_runs as _scan
+
+        with pytest.raises(FileNotFoundError, match="Report log not found"):
+            list(_scan(path=str(tmp_path / "missing.jsonl"), mode="single-file"))
+
+    def test_plugin_warns_on_produce_error(self, tmp_path, monkeypatch):
+        """If stream.produce raises, the plugin prints a warning and continues."""
+        from typer.testing import CliRunner
+
+        from brooklet.cli import app
+
+        report = tmp_path / "report.jsonl"
+        write_run_file(tmp_path, "report", ALL_PASS_EVENTS)
+
+        def boom_produce(self, topic, event, **kwargs):
+            raise OSError("simulated produce failure")
+
+        monkeypatch.setattr("brooklet.stream.Stream.produce", boom_produce)
+        runner = CliRunner()
+        result = runner.invoke(
+            app,
+            [
+                "pytest",
+                "scan",
+                str(report),
+                "--output",
+                "stats",
+                "--stream-dir",
+                str(tmp_path / "stream"),
+            ],
+        )
+        assert result.exit_code == 0
+        assert "failed to produce" in result.output
+
+    def test_plugin_handles_keyboard_interrupt_gracefully(self, tmp_path, monkeypatch):
+        """KeyboardInterrupt mid-scan still emits cumulative totals if any runs collected."""
+        from typer.testing import CliRunner
+
+        from brooklet.cli import app
+        from brooklet.contrib import pytest_analytics as pa
+        from brooklet.contrib.pytest_analytics import RunStats
+
+        write_run_file(tmp_path, "report", ALL_PASS_EVENTS)
+
+        def yield_then_interrupt(*args, **kwargs):
+            yield RunStats(run_id="r1", total=3, passed=3)
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(pa, "scan_runs", yield_then_interrupt)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            app,
+            ["pytest", "scan", str(tmp_path / "report.jsonl")],
+        )
+        assert result.exit_code == 0
+        assert "1 runs totals" in result.output
+
+    def test_plugin_handles_broken_pipe(self, tmp_path, monkeypatch):
+        """BrokenPipeError during scan is swallowed silently (e.g. piped to head)."""
+        from typer.testing import CliRunner
+
+        from brooklet.cli import app
+        from brooklet.contrib import pytest_analytics as pa
+
+        write_run_file(tmp_path, "report", ALL_PASS_EVENTS)
+
+        def boom_scan(*args, **kwargs):
+            raise BrokenPipeError
+            yield  # pragma: no cover
+
+        monkeypatch.setattr(pa, "scan_runs", boom_scan)
+        runner = CliRunner()
+        result = runner.invoke(app, ["pytest", "scan", str(tmp_path / "report.jsonl")])
+        assert result.exit_code == 0
+
+    def test_plugin_handles_value_error(self, tmp_path, monkeypatch):
+        """ValueError during scan exits non-zero with an error message."""
+        from typer.testing import CliRunner
+
+        from brooklet.cli import app
+        from brooklet.contrib import pytest_analytics as pa
+
+        write_run_file(tmp_path, "report", ALL_PASS_EVENTS)
+
+        def boom_scan(*args, **kwargs):
+            raise ValueError("simulated value error")
+            yield  # pragma: no cover
+
+        monkeypatch.setattr(pa, "scan_runs", boom_scan)
+        runner = CliRunner()
+        result = runner.invoke(app, ["pytest", "scan", str(tmp_path / "report.jsonl")])
+        assert result.exit_code == 1
+        assert "simulated value error" in result.output
+
+    def test_plugin_missing_file_exits_one(self, tmp_path):
+        """Single-file mode with non-existent path exits 1."""
+        from typer.testing import CliRunner
+
+        from brooklet.cli import app
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["pytest", "scan", str(tmp_path / "ghost.jsonl")])
+        assert result.exit_code == 1
+        assert "File not found" in result.output

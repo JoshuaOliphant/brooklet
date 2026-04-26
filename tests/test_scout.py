@@ -4,15 +4,26 @@
 import json
 import os
 import time
+from pathlib import Path
 
 from brooklet.contrib.claude_analytics import (
+    CumulativeStats,
     SessionStats,
+    _format_duration,
     _parse_file_events,
     aggregate_session,
     parse_session_event,
+    render_cumulative_block,
+    render_rich,
+    render_session_block,
+    render_streaming,
     scan_sessions,
 )
 from tests.scout_helpers import make_session_event, write_session_file
+
+# Alias used in coverage-gap tests below to avoid shadowing the module-level
+# ``time`` name in scoped helpers.
+_time = time
 
 
 class TestParseSessionEvent:
@@ -597,3 +608,470 @@ class TestActiveDuration:
         """Empty event list → active_duration_s is 0."""
         stats = aggregate_session("empty", [])
         assert stats.active_duration_s == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Coverage gaps: parsing edge cases, follow paths, rendering, plugin
+# ---------------------------------------------------------------------------
+
+
+class TestClaudeAnalyticsGaps:
+    def test_aggregate_skips_non_string_timestamps(self):
+        """Non-string timestamps are skipped during duration parsing."""
+        from brooklet.contrib.claude_analytics import aggregate_session
+
+        events = [
+            {
+                "type": "user",
+                "timestamp": 12345,  # int — not a string
+                "tokens": {},
+                "tools": {},
+                "model": None,
+            },
+            {
+                "type": "assistant",
+                "timestamp": "2026-03-15T02:01:00Z",
+                "tokens": {"input": 100, "output": 50},
+                "tools": {},
+                "model": "claude-opus-4-6",
+            },
+        ]
+        stats = aggregate_session("sess-skip", events)
+        # duration_s stays 0 because we have only one parseable timestamp
+        assert stats.duration_s == 0.0
+
+    def test_aggregate_skips_invalid_timestamps(self):
+        """Unparseable timestamp strings are skipped."""
+        from brooklet.contrib.claude_analytics import aggregate_session
+
+        events = [
+            {
+                "type": "user",
+                "timestamp": "not-a-date",
+                "tokens": {},
+                "tools": {},
+                "model": None,
+            },
+            {
+                "type": "assistant",
+                "timestamp": "also-not-a-date",
+                "tokens": {"input": 100, "output": 50},
+                "tools": {},
+                "model": "claude-opus-4-6",
+            },
+        ]
+        stats = aggregate_session("sess-bad", events)
+        assert stats.duration_s == 0.0
+
+    def test_parse_file_events_skips_blank_lines(self, tmp_path):
+        """Blank lines in a session JSONL are silently skipped."""
+        from brooklet.contrib.claude_analytics import _parse_file_events
+
+        path = tmp_path / "session.jsonl"
+        path.write_text(
+            '\n\n{"type": "user", "timestamp": "2026-03-15T02:00:00Z", "sessionId": "s"}\n\n'
+        )
+        events = _parse_file_events(str(path))
+        assert len(events) == 1
+
+    def test_safe_mtime_warns_on_oserror(self, tmp_path, capsys, monkeypatch):
+        """_safe_mtime returns 0.0 and warns when stat fails on a JSONL file."""
+        from brooklet.contrib.claude_analytics import scan_sessions
+
+        sessions = tmp_path / "sessions"
+        sessions.mkdir()
+        f = sessions / "abc.jsonl"
+        f.write_text('{"type": "user", "timestamp": "2026-03-15T02:00:00Z", "sessionId": "abc"}\n')
+
+        original_stat = Path.stat
+
+        def selective_stat(self, *args, **kwargs):
+            if str(self).endswith(".jsonl"):
+                raise OSError("simulated stat failure")
+            return original_stat(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "stat", selective_stat)
+        list(scan_sessions(str(sessions), current=True))
+        captured = capsys.readouterr()
+        assert "cannot stat" in captured.err
+
+    def test_current_follow_window_zero(self, tmp_path):
+        """--window 0 with --follow yields the latest file each iteration."""
+        import threading
+
+        sessions = tmp_path / "sessions"
+        sessions.mkdir()
+        f = sessions / "session-x.jsonl"
+        f.write_text(
+            '{"type": "user", "timestamp": "2026-03-15T02:00:00Z", "sessionId": "session-x"}\n'
+        )
+
+        from brooklet.contrib.claude_analytics import scan_sessions
+
+        results: list = []
+
+        def collect():
+            for s in scan_sessions(str(sessions), current=True, follow=True, window_minutes=0):
+                results.append(s)
+                if results:
+                    break
+
+        t = threading.Thread(target=collect, daemon=True)
+        t.start()
+        t.join(timeout=5)
+
+        assert results
+        assert results[0].session_id == "session-x"
+
+    def test_current_follow_skips_files_with_stat_error(self, tmp_path, monkeypatch):
+        """Inner-loop OSError on target.stat().st_size triggers the continue branch.
+
+        Uses the call-stack to differentiate `_safe_mtime` (which tolerates
+        OSError) from the bare ``target.stat().st_size`` site, so the file
+        passes the cutoff filter but fails on the inner stat call.
+        """
+        import inspect
+        import threading
+
+        sessions = tmp_path / "sessions"
+        sessions.mkdir()
+        f = sessions / "vanish.jsonl"
+        f.write_text(
+            '{"type": "user", "timestamp": "2026-03-15T02:00:00Z", "sessionId": "vanish"}\n'
+        )
+
+        from brooklet.contrib.claude_analytics import scan_sessions
+
+        original_stat = Path.stat
+        inner_hits = {"n": 0}
+
+        def flaky_stat(self, *args, **kwargs):
+            if "vanish.jsonl" not in str(self):
+                return original_stat(self, *args, **kwargs)
+            # Walk up one frame to see who's calling stat.
+            caller = inspect.stack()[1].function
+            if caller == "_safe_mtime":
+                # Let _safe_mtime succeed so the file passes the cutoff filter.
+                return original_stat(self, *args, **kwargs)
+            # Direct caller is scan_sessions's inner for-target loop — fail it.
+            inner_hits["n"] += 1
+            raise OSError("simulated inner-stat failure")
+
+        monkeypatch.setattr(Path, "stat", flaky_stat)
+
+        results: list = []
+        stop = threading.Event()
+
+        def runner():
+            try:
+                for s in scan_sessions(str(sessions), current=True, follow=True, window_minutes=30):
+                    results.append(s)
+                    if stop.is_set():
+                        break
+            except Exception:
+                pass
+
+        t = threading.Thread(target=runner, daemon=True)
+        t.start()
+
+        # Wait for inner stat to be called and fail.
+        deadline = _time.time() + 6
+        while _time.time() < deadline and inner_hits["n"] == 0:
+            _time.sleep(0.1)
+        stop.set()
+        t.join(timeout=3)
+
+        assert inner_hits["n"] >= 1
+
+    def test_current_follow_yields_session_events_pop(self, tmp_path):
+        """When a session leaves the window, session_events is cleaned up."""
+        import os
+        import threading
+
+        sessions = tmp_path / "sessions"
+        sessions.mkdir()
+        f = sessions / "session-eph.jsonl"
+        f.write_text(
+            '{"type": "user", "timestamp": "2026-03-15T02:00:00Z", "sessionId": "session-eph"}\n'
+        )
+
+        from brooklet.contrib.claude_analytics import scan_sessions
+
+        collected: list = []
+        stop = threading.Event()
+
+        def collect():
+            # Consume as long as the test wants — break only via the stop flag,
+            # so the generator runs the post-yield cleanup (session_events.pop,
+            # changed = True) before we tear down.
+            for s in scan_sessions(str(sessions), current=True, follow=True, window_minutes=1):
+                collected.append(s)
+                if stop.is_set():
+                    break
+
+        t = threading.Thread(target=collect, daemon=True)
+        t.start()
+        _time.sleep(2.5)
+        old_time = _time.time() - 600
+        os.utime(f, (old_time, old_time))
+        # Wait until removal yields, then keep the generator alive a bit so the
+        # post-yield lines (307-308) execute before we stop iteration.
+        deadline = _time.time() + 5
+        while _time.time() < deadline and not any(s.removed for s in collected):
+            _time.sleep(0.1)
+        # Give the generator a tick to run the post-yield body.
+        _time.sleep(0.5)
+        stop.set()
+        t.join(timeout=5)
+
+        assert any(s.removed for s in collected)
+
+    def test_format_duration_hours_branch(self):
+        """_format_duration returns hours when minutes >= 60."""
+        # 4 hours = 14400 seconds
+        assert _format_duration(14400.0).endswith("h")
+
+    def test_render_streaming_skips_removed(self, capsys):
+        """render_streaming silently drops sessions with removed=True."""
+        from brooklet.contrib.claude_analytics import SessionStats
+
+        stats = [
+            SessionStats(session_id="alive-1", event_count=1, model="claude-opus-4-6"),
+            SessionStats(session_id="ghost-2", removed=True),
+        ]
+        out = render_streaming(iter(stats))
+        # Removed session does not appear; alive session does
+        assert "alive-1" in out
+        assert "ghost-2" not in out
+
+    def test_render_session_block_with_active_duration_suffix(self):
+        """Active suffix appended when duration is significantly less than wall clock."""
+        from brooklet.contrib.claude_analytics import SessionStats
+
+        s = SessionStats(
+            session_id="sess-active",
+            event_count=2,
+            duration_s=1000.0,
+            active_duration_s=100.0,
+            model="claude-opus-4-6",
+            tokens={"input": 5, "output": 3, "cache_read": 0, "cache_create": 0},
+            tools={"Read": 4, "Bash": 2},
+            start_time="2026-03-15T02:00:00Z",
+        )
+        block = render_session_block(s)
+        assert "active:" in block
+        assert "Read" in block
+
+    def test_render_cumulative_block_with_active_suffix(self):
+        """Cumulative block also shows active suffix when sessions have idle gaps."""
+        cum = CumulativeStats()
+        from brooklet.contrib.claude_analytics import SessionStats
+
+        cum.update(
+            SessionStats(
+                session_id="s1",
+                event_count=10,
+                duration_s=1000.0,
+                active_duration_s=50.0,
+                model="claude-opus-4-6",
+                tokens={"input": 100, "output": 50, "cache_read": 10, "cache_create": 5},
+                tools={"Read": 5},
+            )
+        )
+        block = render_cumulative_block(cum)
+        assert "active:" in block
+        assert "models:" in block
+        assert "tools:" in block
+
+    def test_render_rich_renders_sessions(self):
+        """render_rich consumes a stats iterator and updates a live table."""
+        from brooklet.contrib.claude_analytics import SessionStats
+
+        stats = [
+            SessionStats(
+                session_id="sess-1",
+                event_count=3,
+                duration_s=120.0,
+                active_duration_s=10.0,
+                model="claude-opus-4-6",
+                tokens={"input": 100, "output": 50, "cache_read": 10, "cache_create": 5},
+                tools={"Read": 2, "Bash": 1},
+            ),
+            # Updated stats for the same session — exercises the in-place update path
+            SessionStats(
+                session_id="sess-1",
+                event_count=4,
+                duration_s=130.0,
+                active_duration_s=20.0,
+                model="claude-opus-4-6",
+                tokens={"input": 110, "output": 55, "cache_read": 10, "cache_create": 5},
+                tools={"Read": 3, "Bash": 1},
+            ),
+            # Removal signal — exercises the removal path
+            SessionStats(session_id="sess-1", removed=True),
+        ]
+        # Should not crash
+        render_rich(iter(stats))
+
+    def test_render_rich_handles_brand_new_then_remove(self):
+        """Brand-new session followed by removal cleans up correctly."""
+        from brooklet.contrib.claude_analytics import SessionStats
+
+        stats = [
+            SessionStats(
+                session_id="ghost",
+                event_count=1,
+                duration_s=10.0,
+                model="claude-opus-4-6",
+                tokens={"input": 1, "output": 1, "cache_read": 0, "cache_create": 0},
+            ),
+            SessionStats(session_id="ghost", removed=True),
+        ]
+        render_rich(iter(stats))
+
+    def test_render_rich_rebuilds_cumulative_after_removal(self):
+        """When one of multiple sessions is removed, remaining sessions are re-totaled."""
+        from brooklet.contrib.claude_analytics import SessionStats
+
+        # Two distinct sessions, then remove the first — exercises the rebuild
+        # loop (line 575: cumulative.update(s) for each remaining session).
+        stats = [
+            SessionStats(
+                session_id="alpha",
+                event_count=2,
+                duration_s=10.0,
+                model="claude-opus-4-6",
+                tokens={"input": 5, "output": 3, "cache_read": 0, "cache_create": 0},
+            ),
+            SessionStats(
+                session_id="beta",
+                event_count=4,
+                duration_s=20.0,
+                model="claude-opus-4-6",
+                tokens={"input": 8, "output": 4, "cache_read": 0, "cache_create": 0},
+            ),
+            SessionStats(session_id="alpha", removed=True),
+        ]
+        render_rich(iter(stats))
+
+    def test_plugin_warns_on_produce_error(self, tmp_path, monkeypatch, session_dir):
+        """If stream.produce raises, the plugin prints a warning and continues."""
+        from typer.testing import CliRunner
+
+        from brooklet.cli import app
+
+        def boom_produce(self, topic, event, **kwargs):
+            raise OSError("simulated produce failure")
+
+        monkeypatch.setattr("brooklet.stream.Stream.produce", boom_produce)
+        runner = CliRunner()
+        result = runner.invoke(
+            app,
+            [
+                "scout",
+                "scan",
+                str(session_dir),
+                "--output",
+                "scout/stats",
+                "--stream-dir",
+                str(tmp_path / "stream"),
+            ],
+        )
+        assert result.exit_code == 0
+        assert "failed to produce" in result.output
+
+    def test_plugin_dashboard_path(self, monkeypatch, session_dir):
+        """--dashboard routes through render_rich."""
+        from typer.testing import CliRunner
+
+        from brooklet.cli import app
+        from brooklet.contrib import claude_analytics as ca
+
+        called = {"n": 0}
+
+        def fake_render_rich(stats_iter):
+            for _ in stats_iter:
+                called["n"] += 1
+
+        monkeypatch.setattr(ca, "render_rich", fake_render_rich)
+        runner = CliRunner()
+        result = runner.invoke(app, ["scout", "scan", str(session_dir), "--dashboard"])
+        assert result.exit_code == 0
+        assert called["n"] >= 1
+
+    def test_plugin_swallows_keyboard_interrupt(self, monkeypatch, session_dir):
+        """KeyboardInterrupt during render is swallowed and exits cleanly."""
+        from typer.testing import CliRunner
+
+        from brooklet.cli import app
+        from brooklet.contrib import claude_analytics as ca
+
+        def boom_render(stats_iter):
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(ca, "render_streaming", boom_render)
+        runner = CliRunner()
+        result = runner.invoke(app, ["scout", "scan", str(session_dir)])
+        assert result.exit_code == 0
+
+    def test_scan_sessions_glob_follow_groups_events_by_session(self, tmp_path):
+        """Glob+follow path groups events by session and yields aggregates on switch."""
+        import json as _json
+        import threading
+
+        sessions = tmp_path / "sessions"
+        sessions.mkdir()
+        # Each event embeds an explicit `_src` pointing at its session file —
+        # wrap() preserves existing _src, so the consumer sees per-file sources
+        # and scan_sessions can detect the cross-session transition.
+        (sessions / "sess-a.jsonl").write_text(
+            _json.dumps(
+                {
+                    "type": "user",
+                    "timestamp": "2026-03-15T02:00:00Z",
+                    "sessionId": "sess-a",
+                    "_src": str(sessions / "sess-a.jsonl"),
+                }
+            )
+            + "\n"
+        )
+        (sessions / "sess-b.jsonl").write_text(
+            _json.dumps(
+                {
+                    "type": "user",
+                    "timestamp": "2026-03-15T02:01:00Z",
+                    "sessionId": "sess-b",
+                    "_src": str(sessions / "sess-b.jsonl"),
+                }
+            )
+            + "\n"
+        )
+
+        from brooklet.contrib.claude_analytics import scan_sessions
+
+        collected: list = []
+        stop = threading.Event()
+
+        def collect():
+            try:
+                for s in scan_sessions(str(sessions), follow=True):
+                    collected.append(s)
+                    if stop.is_set():
+                        break
+            except Exception:
+                pass
+
+        t = threading.Thread(target=collect, daemon=True)
+        t.start()
+        # Wait until at least one switch yield happens (sess-a aggregate)
+        deadline = _time.time() + 6
+        while _time.time() < deadline and not collected:
+            _time.sleep(0.1)
+        stop.set()
+        t.join(timeout=5)
+
+        # The transition path (lines 348-350) executes when events flow from
+        # sess-a to sess-b in the consumer stream.
+        assert collected
+        ids = {s.session_id for s in collected}
+        assert "sess-a" in ids

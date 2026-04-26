@@ -69,7 +69,7 @@ def run_pipeline(stream_dir: str, group: str, verbose: bool) -> int:
         print(
             f"Source topic '{SOURCE_TOPIC}' not found in {stream_dir}.\n"
             f"Seed it first:\n\n"
-            "  git log --format='{\"hash\":\"%h\",\"author\":\"%an\",\"msg\":\"%s\"}'"
+            '  git log --format=\'{"hash":"%h","author":"%an","msg":"%s"}\''
             " -20 \\\n"
             f"    | brooklet produce {SOURCE_TOPIC} --stream-dir {stream_dir}\n",
             file=sys.stderr,
@@ -98,8 +98,7 @@ def run_pipeline(stream_dir: str, group: str, verbose: bool) -> int:
     if produced == 0 and skipped == 0:
         print(f"Nothing to process — group '{group}' is already caught up on '{SOURCE_TOPIC}'.")
         print(
-            f"(Inspect the derived topic: brooklet cat {DERIVED_TOPIC}"
-            f" --stream-dir {stream_dir})"
+            f"(Inspect the derived topic: brooklet cat {DERIVED_TOPIC} --stream-dir {stream_dir})"
         )
     else:
         print(f"\nPipeline complete: {produced} enriched, {skipped} skipped.")
@@ -122,9 +121,7 @@ def main() -> int:
         default=PIPELINE_GROUP,
         help=f"Consumer group name (default: {PIPELINE_GROUP})",
     )
-    parser.add_argument(
-        "--verbose", "-v", action="store_true", help="Print each enriched commit"
-    )
+    parser.add_argument("--verbose", "-v", action="store_true", help="Print each enriched commit")
     args = parser.parse_args()
     return run_pipeline(args.stream_dir, args.group, args.verbose)
 
