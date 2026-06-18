@@ -1,5 +1,6 @@
 # ABOUTME: Thin envelope auto-injection for JSONL events
-# ABOUTME: Adds _ts, _seq, _src metadata fields without clobbering existing values
+# ABOUTME: Adds _ts, _seq, _src metadata fields without clobbering existing values.
+# ABOUTME: _seq is assigned once at produce time and is topic-monotonic on read.
 
 import json
 import logging
@@ -14,12 +15,17 @@ def wrap(line: str, seq: int, source: str | None = None) -> Event | None:
     """Wrap a raw JSONL line with envelope metadata.
 
     Auto-injects _ts (ISO 8601 timestamp) and _seq (sequence number).
-    Optionally sets _src (producer identifier). Existing _ts and _src
-    in the payload are preserved; _seq is always overwritten by brooklet.
+    Optionally sets _src (producer identifier). Existing _ts, _seq, and _src
+    in the payload are all preserved.
+
+    _seq is topic-monotonic: it is assigned once, at produce time (see
+    serialize()), and flows through unchanged on read. The `seq` argument is
+    only a fallback for legacy or externally-produced lines that carry no
+    persisted _seq — it never overwrites an existing value.
 
     Args:
         line: A single JSON line string.
-        seq: Monotonic sequence number within the topic.
+        seq: Fallback sequence number, used only when the line has no _seq.
         source: Optional producer identifier.
 
     Returns:
@@ -38,8 +44,10 @@ def wrap(line: str, seq: int, source: str | None = None) -> Event | None:
     # _ts: auto-set if missing, preserve if present
     event.setdefault("_ts", datetime.now(UTC).isoformat())
 
-    # _seq: always set by brooklet — this is the canonical offset key
-    event["_seq"] = seq
+    # _seq: preserve the persisted topic-monotonic value (set at produce time).
+    # Only fall back to the supplied seq when the line carries no _seq, so a
+    # gapless resume reports the true topic position rather than a per-run count.
+    event.setdefault("_seq", seq)
 
     # _src: set from parameter if missing, preserve if present
     if source is not None:

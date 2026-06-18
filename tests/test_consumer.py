@@ -827,3 +827,51 @@ class TestConsumerSegmentSearch:
 
         types = [e["type"] for e in events]
         assert types == ["s1a", "s1b", "s2a", "s3a", "s3b"]
+
+
+class TestTopicMonotonicSeq:
+    """_seq must be topic-monotonic (the persisted produce-time value), not a
+    per-Consumer-instance counter that resets on every new instance.
+
+    Regression coverage for brooklet-a2c: after a gapless resume, the second
+    run's first delivered event must carry the topic position assigned at
+    produce time, not _seq=1.
+    """
+
+    def test_seq_is_topic_monotonic_across_consumer_instances(self, tmp_path):
+        """Produce 2, consume (resume), produce 2 more, consume again.
+
+        The second consume must yield _seq 3 and 4 — the persisted
+        topic-monotonic positions — not 1 and 2 from a per-run reset.
+        """
+        from brooklet.core.stream import Stream
+
+        stream = Stream(str(tmp_path))
+
+        stream.produce("demo", {"n": 1})
+        stream.produce("demo", {"n": 2})
+
+        first = list(stream.consume("demo", group="g"))
+        assert [e["_seq"] for e in first] == [1, 2]
+
+        stream.produce("demo", {"n": 3})
+        stream.produce("demo", {"n": 4})
+
+        second = list(stream.consume("demo", group="g"))
+        # The bug: a per-run counter would reset and yield [1, 2] here.
+        assert [e["n"] for e in second] == [3, 4]
+        assert [e["_seq"] for e in second] == [3, 4]
+
+    def test_seq_stable_across_independent_readers(self, tmp_path):
+        """The same event gets the same _seq regardless of which reader sees it."""
+        from brooklet.core.stream import Stream
+
+        stream = Stream(str(tmp_path))
+        for n in range(1, 4):
+            stream.produce("t", {"n": n})
+
+        reader_a = [e["_seq"] for e in stream.consume("t", group="a")]
+        reader_b = [e["_seq"] for e in stream.consume("t", group="b")]
+
+        assert reader_a == [1, 2, 3]
+        assert reader_b == [1, 2, 3]

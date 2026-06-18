@@ -78,7 +78,11 @@ class Consumer:
         self._offsets_dir = Path(offsets_dir)
         self._source = source
         self._follow = follow
-        self._seq = 0
+        # Fallback sequence counter used only for legacy/external lines that
+        # carry no persisted _seq. Produced lines already hold a topic-monotonic
+        # _seq assigned at produce time, which wrap() preserves; this counter
+        # never overrides it. See brooklet-a2c.
+        self._fallback_seq = 0
         self._closed = False
         self._file_handle = None
         self._observer = None
@@ -214,8 +218,11 @@ class Consumer:
                 line = f.readline()
                 if not line:
                     break
-                self._seq += 1
-                event = wrap(line, seq=self._seq, source=self._source)
+                # Advance the fallback counter and hand it to wrap(). wrap()
+                # preserves any persisted _seq and uses this only when the line
+                # has none (legacy/external sources).
+                self._fallback_seq += 1
+                event = wrap(line, seq=self._fallback_seq, source=self._source)
                 if event is not None:
                     count += 1
                     yield event

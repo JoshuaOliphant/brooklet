@@ -43,12 +43,27 @@ class TestWrap:
         result = wrap("", seq=1)
         assert result is None
 
-    def test_wrap_seq_always_set(self):
-        """_seq is always set from the parameter, even if the line has one."""
+    def test_wrap_preserves_existing_seq(self):
+        """A persisted _seq is preserved; the seq param is only a fallback.
+
+        _seq is topic-monotonic, assigned once at produce time. wrap() must not
+        clobber it on read, or a gapless resume would renumber from the per-run
+        counter instead of the true topic position (brooklet-a2c).
+        """
         line = json.dumps({"_seq": 999, "type": "hello"})
         result = wrap(line, seq=5)
 
-        # _seq is always overwritten by brooklet — it's the canonical offset key
+        assert result["_seq"] == 999
+
+    def test_wrap_seq_fallback_when_absent(self):
+        """When the line carries no _seq, wrap() falls back to the seq param.
+
+        Covers legacy/external JSONL produced outside brooklet (AC-6): derive
+        gracefully from the supplied counter rather than crashing or omitting.
+        """
+        line = json.dumps({"type": "hello"})
+        result = wrap(line, seq=5)
+
         assert result["_seq"] == 5
 
     def test_wrap_source_none_no_src_field(self):

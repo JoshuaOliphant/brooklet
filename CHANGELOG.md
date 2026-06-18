@@ -2,6 +2,19 @@
 
 All notable changes to brooklet are documented here.
 
+## [Unreleased]
+
+### Bug Fixes
+
+- **consumer:** `_seq` is now topic-monotonic (the persisted produce-time
+  value) instead of resetting per `Consumer` instance. After a gapless resume
+  the first delivered event reports its true topic position rather than `_seq=1`
+  (brooklet-a2c, DEC-015).
+
+  **BREAKING (behavioral):** consumers that relied on `_seq` restarting at 1 per
+  read session now observe topic-monotonic numbering on consume/watch. No
+  on-disk schema change; existing data files are read unchanged.
+
 ## [0.5.0] - 2026-04-12
 
 ### Features

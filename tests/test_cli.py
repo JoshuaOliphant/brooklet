@@ -212,6 +212,40 @@ def test_produce_then_consume_roundtrip(tmp_path):
         assert got["seq"] == orig["seq"]
 
 
+def test_consume_seq_is_topic_monotonic_after_gapless_resume(tmp_path):
+    """AC-4: `consume` JSON output emits the persisted topic-monotonic _seq.
+
+    Reproduces brooklet-a2c: produce 2, consume (saving the offset), produce 2
+    more, consume again with the same group. The second consume must report
+    _seq 3 and 4 — not 1 and 2 from a per-run reset.
+    """
+
+    def produce(payloads):
+        runner.invoke(
+            app,
+            ["produce", "demo", "--stream-dir", str(tmp_path)],
+            input="\n".join(json.dumps(p) for p in payloads) + "\n",
+        )
+
+    def consume():
+        result = runner.invoke(
+            app,
+            ["consume", "demo", "--group", "g", "--stream-dir", str(tmp_path)],
+        )
+        assert result.exit_code == 0
+        out = result.output.strip()
+        return [json.loads(line) for line in out.split("\n")] if out else []
+
+    produce([{"n": 1}, {"n": 2}])
+    first = consume()
+    assert [e["_seq"] for e in first] == [1, 2]
+
+    produce([{"n": 3}, {"n": 4}])
+    second = consume()
+    assert [e["n"] for e in second] == [3, 4]
+    assert [e["_seq"] for e in second] == [3, 4]
+
+
 def test_version_flag(tmp_path):
     result = runner.invoke(app, ["--version"])
     assert result.exit_code == 0

@@ -78,7 +78,7 @@ Every event gets thin metadata auto-injected:
 | Field | Description | Behavior |
 |-------|-------------|----------|
 | `_ts` | ISO 8601 timestamp | Set if missing, preserved if present |
-| `_seq` | Monotonic sequence number | Always set by brooklet |
+| `_seq` | Topic-monotonic sequence number | Assigned at produce time, preserved on read |
 | `_src` | Producer identifier | Set from `source` param or topic name |
 
 The `_` prefix avoids collisions with any producer's payload.
@@ -163,11 +163,11 @@ echo '{"n":4,"msg":"still gap"}'  | brooklet produce demo
 # Restart — resumes from the saved offset, only shows the new events
 brooklet watch demo --group resumer &
 WPID=$! ; sleep 1 ; kill $WPID ; wait
-# #1 HH:MM:SS n=3 msg=during gap
-# #2 HH:MM:SS n=4 msg=still gap
+# #3 HH:MM:SS n=3 msg=during gap
+# #4 HH:MM:SS n=4 msg=still gap
 ```
 
-Same group name, different process, zero replay. The second run's `#N` prefix is a per-run counter that restarts at 1, but the `n=3` / `n=4` values in the payload show that brooklet skipped events 1–2 and delivered only what was written during the gap. `tail -f` cannot do this.
+Same group name, different process, zero replay. The `#N` prefix is the topic-monotonic `_seq` assigned at produce time, so the second run picks up at `#3` / `#4` — the true position in the topic, not a per-run counter that restarts at 1. Brooklet skipped events 1–2 and delivered only what was written during the gap. `tail -f` cannot do this.
 
 ### Plugin system
 
