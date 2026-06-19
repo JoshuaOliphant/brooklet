@@ -827,3 +827,84 @@ class TestConsumerSegmentSearch:
 
         types = [e["type"] for e in events]
         assert types == ["s1a", "s1b", "s2a", "s3a", "s3b"]
+
+
+class TestTopicMonotonicSeq:
+    """_seq must be topic-monotonic (the persisted produce-time value), not a
+    per-Consumer-instance counter that resets on every new instance.
+
+    Regression coverage for brooklet-a2c: after a gapless resume, the second
+    run's first delivered event must carry the topic position assigned at
+    produce time, not _seq=1.
+    """
+
+    def test_seq_is_topic_monotonic_across_consumer_instances(self, tmp_path):
+        """Produce 2, consume (resume), produce 2 more, consume again.
+
+        The second consume must yield _seq 3 and 4 — the persisted
+        topic-monotonic positions — not 1 and 2 from a per-run reset.
+        """
+        from brooklet.core.stream import Stream
+
+        stream = Stream(str(tmp_path))
+
+        stream.produce("demo", {"n": 1})
+        stream.produce("demo", {"n": 2})
+
+        first = list(stream.consume("demo", group="g"))
+        assert [e["_seq"] for e in first] == [1, 2]
+
+        stream.produce("demo", {"n": 3})
+        stream.produce("demo", {"n": 4})
+
+        second = list(stream.consume("demo", group="g"))
+        # The bug: a per-run counter would reset and yield [1, 2] here.
+        assert [e["n"] for e in second] == [3, 4]
+        assert [e["_seq"] for e in second] == [3, 4]
+
+    def test_seq_stable_across_independent_readers(self, tmp_path):
+        """The same event gets the same _seq regardless of which reader sees it."""
+        from brooklet.core.stream import Stream
+
+        stream = Stream(str(tmp_path))
+        for n in range(1, 4):
+            stream.produce("t", {"n": n})
+
+        reader_a = [e["_seq"] for e in stream.consume("t", group="a")]
+        reader_b = [e["_seq"] for e in stream.consume("t", group="b")]
+
+        assert reader_a == [1, 2, 3]
+        assert reader_b == [1, 2, 3]
+
+    def test_mixed_topic_legacy_line_seq_is_monotonic(self, tmp_path, offsets_dir):
+        """A legacy (no-_seq) line after a persisted-_seq line gets a greater _seq.
+
+        The fallback counter must track the topic high-water mark: when a line
+        carries a valid persisted _seq, the counter advances to at least that
+        value, so a subsequent legacy line is numbered above the last seen _seq
+        rather than from its position-in-this-read (which could collide with or
+        fall below the persisted value).
+        """
+        path = tmp_path / "mixed-seq.jsonl"
+        path.write_text(
+            json.dumps({"_seq": 100, "type": "persisted"})
+            + "\n"
+            + json.dumps({"type": "legacy"})
+            + "\n"
+        )
+
+        consumer = Consumer(
+            path=str(path),
+            mode="single-file",
+            group="g",
+            topic="mixed-seq",
+            offsets_dir=offsets_dir,
+        )
+        events = list(consumer)
+
+        seqs = [e["_seq"] for e in events]
+        # Persisted value preserved; legacy line numbered above it (monotonic,
+        # no collision). Position-in-read would have given the legacy line 2.
+        assert seqs[0] == 100
+        assert seqs[1] > 100
+        assert seqs[0] < seqs[1]

@@ -212,6 +212,40 @@ def test_produce_then_consume_roundtrip(tmp_path):
         assert got["seq"] == orig["seq"]
 
 
+def test_consume_seq_is_topic_monotonic_after_gapless_resume(tmp_path):
+    """AC-4: `consume` JSON output emits the persisted topic-monotonic _seq.
+
+    Reproduces brooklet-a2c: produce 2, consume (saving the offset), produce 2
+    more, consume again with the same group. The second consume must report
+    _seq 3 and 4 — not 1 and 2 from a per-run reset.
+    """
+
+    def produce(payloads):
+        runner.invoke(
+            app,
+            ["produce", "demo", "--stream-dir", str(tmp_path)],
+            input="\n".join(json.dumps(p) for p in payloads) + "\n",
+        )
+
+    def consume():
+        result = runner.invoke(
+            app,
+            ["consume", "demo", "--group", "g", "--stream-dir", str(tmp_path)],
+        )
+        assert result.exit_code == 0
+        out = result.output.strip()
+        return [json.loads(line) for line in out.split("\n")] if out else []
+
+    produce([{"n": 1}, {"n": 2}])
+    first = consume()
+    assert [e["_seq"] for e in first] == [1, 2]
+
+    produce([{"n": 3}, {"n": 4}])
+    second = consume()
+    assert [e["n"] for e in second] == [3, 4]
+    assert [e["_seq"] for e in second] == [3, 4]
+
+
 def test_version_flag(tmp_path):
     result = runner.invoke(app, ["--version"])
     assert result.exit_code == 0
@@ -247,6 +281,34 @@ def test_cat_does_not_advance_offsets(tmp_path):
 def test_cat_missing_topic(tmp_path):
     result = runner.invoke(app, ["cat", "nonexistent", "--stream-dir", str(tmp_path)])
     assert result.exit_code != 0
+
+
+def test_cat_mixed_topic_seq_is_monotonic(tmp_path):
+    """cat numbering tracks the topic high-water mark across mixed sources.
+
+    A persisted-_seq line followed by a legacy (no-_seq) line: the legacy line
+    must get a _seq above the persisted value, not its position-in-the-file.
+    """
+    external = tmp_path / "external.jsonl"
+    external.write_text(
+        json.dumps({"_seq": 100, "type": "persisted"})
+        + "\n"
+        + json.dumps({"type": "legacy"})
+        + "\n"
+    )
+    register = runner.invoke(
+        app,
+        ["register", "ext", str(external), "--stream-dir", str(tmp_path)],
+    )
+    assert register.exit_code == 0
+
+    result = runner.invoke(app, ["cat", "ext", "--stream-dir", str(tmp_path)])
+    assert result.exit_code == 0
+
+    lines = result.output.strip().split("\n")
+    seqs = [json.loads(line)["_seq"] for line in lines]
+    assert seqs[0] == 100
+    assert seqs[1] > 100
 
 
 def test_stream_dir_env_var(tmp_path, monkeypatch):

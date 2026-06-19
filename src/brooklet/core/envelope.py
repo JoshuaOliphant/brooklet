@@ -1,5 +1,6 @@
 # ABOUTME: Thin envelope auto-injection for JSONL events
-# ABOUTME: Adds _ts, _seq, _src metadata fields without clobbering existing values
+# ABOUTME: Adds _ts, _seq, _src metadata fields without clobbering existing values.
+# ABOUTME: _seq is assigned once at produce time and is topic-monotonic on read.
 
 import json
 import logging
@@ -10,16 +11,35 @@ from brooklet.core.types import Event
 logger = logging.getLogger("brooklet")
 
 
+def _valid_persisted_seq(value: object) -> bool:
+    """Return True if a payload's _seq is a usable topic-monotonic int.
+
+    The EnvelopeMeta contract is `_seq: int`. A persisted _seq is only trusted
+    when it is a real int (bool is an int subclass but is not a sequence number,
+    so it is rejected). Anything else — strings, floats, None — is treated as no
+    usable persisted _seq, so wrap() falls back to the supplied seq.
+    """
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
 def wrap(line: str, seq: int, source: str | None = None) -> Event | None:
     """Wrap a raw JSONL line with envelope metadata.
 
     Auto-injects _ts (ISO 8601 timestamp) and _seq (sequence number).
-    Optionally sets _src (producer identifier). Existing _ts and _src
-    in the payload are preserved; _seq is always overwritten by brooklet.
+    Optionally sets _src (producer identifier). Existing _ts and _src in the
+    payload are preserved unconditionally; a persisted _seq is preserved only
+    when it is a valid int (see below).
+
+    _seq is topic-monotonic: it is assigned once, at produce time (see
+    serialize()), and flows through unchanged on read. The `seq` argument is a
+    fallback used when a line carries no _seq, or carries one that violates the
+    `_seq: int` contract (e.g. a non-int from a legacy/external source) — such a
+    line is treated as having no usable persisted _seq. A valid persisted _seq
+    is never overwritten.
 
     Args:
         line: A single JSON line string.
-        seq: Monotonic sequence number within the topic.
+        seq: Fallback sequence number, used when the line has no valid int _seq.
         source: Optional producer identifier.
 
     Returns:
@@ -38,8 +58,13 @@ def wrap(line: str, seq: int, source: str | None = None) -> Event | None:
     # _ts: auto-set if missing, preserve if present
     event.setdefault("_ts", datetime.now(UTC).isoformat())
 
-    # _seq: always set by brooklet — this is the canonical offset key
-    event["_seq"] = seq
+    # _seq: preserve the persisted topic-monotonic value (set at produce time),
+    # but only when it is a valid int — a non-int persisted _seq violates the
+    # `_seq: int` contract and is replaced by the supplied fallback. Falling back
+    # also covers lines that carry no _seq at all (legacy/external sources), so a
+    # gapless resume reports the true topic position rather than a per-run count.
+    if not _valid_persisted_seq(event.get("_seq")):
+        event["_seq"] = seq
 
     # _src: set from parameter if missing, preserve if present
     if source is not None:
@@ -52,9 +77,12 @@ def serialize(event: dict, seq: int, source: str | None = None) -> str:
     """Serialize a dict to a JSON line with envelope fields.
 
     Inverse of wrap(): takes a dict and returns a JSON string line with
-    envelope fields injected. Same semantics as wrap():
+    envelope fields injected. _ts and _src share wrap()'s preserve-if-present
+    semantics, but _seq does not — produce and read are deliberately asymmetric:
     - _ts: set to now() if missing, preserved if present
-    - _seq: always set by brooklet (overwrites)
+    - _seq: always overwritten here. Produce is the canonical assignment point —
+      brooklet owns the topic-monotonic sequence, so the supplied seq wins. (At
+      read time wrap() instead preserves a valid persisted _seq; see wrap().)
     - _src: set from source param if missing, preserved if present
 
     Returns a JSON string with trailing newline.
@@ -62,7 +90,9 @@ def serialize(event: dict, seq: int, source: str | None = None) -> str:
     # _ts: auto-set if missing, preserve if present
     event.setdefault("_ts", datetime.now(UTC).isoformat())
 
-    # _seq: always set by brooklet — canonical offset key
+    # _seq: produce-time canonical assignment — brooklet owns the topic-monotonic
+    # offset key, so overwrite any caller-supplied value. (Read-time wrap()
+    # preserves a valid persisted _seq instead; the asymmetry is intentional.)
     event["_seq"] = seq
 
     # _src: set from parameter if missing, preserve if present
