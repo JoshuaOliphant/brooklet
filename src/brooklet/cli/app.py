@@ -245,7 +245,12 @@ def cat(
 
     filepaths = sorted(glob_module.glob(file_path)) if file_mode == "glob" else [file_path]
 
-    seq = 0
+    # Fallback sequence counter, same role as Consumer._fallback_seq: used only
+    # for legacy/external lines that carry no valid persisted _seq. It tracks the
+    # topic high-water mark so a legacy line after a persisted-_seq line is
+    # numbered above the last seen _seq (monotonic, collision-free across mixed
+    # sources) rather than from its position in the file.
+    fallback_seq = 0
     for fp in filepaths:
         try:
             with open(fp) as f:
@@ -253,9 +258,10 @@ def cat(
                     line = line.strip()
                     if not line:
                         continue
-                    seq += 1
-                    event = wrap(line, seq=seq, source=topic)
+                    fallback_seq += 1
+                    event = wrap(line, seq=fallback_seq, source=topic)
                     if event is not None:
+                        fallback_seq = max(fallback_seq, event["_seq"])
                         typer.echo(json.dumps(event))
         except OSError as e:
             typer.echo(f"Warning: cannot read {fp}: {e}", err=True)

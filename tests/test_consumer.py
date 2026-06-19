@@ -875,3 +875,36 @@ class TestTopicMonotonicSeq:
 
         assert reader_a == [1, 2, 3]
         assert reader_b == [1, 2, 3]
+
+    def test_mixed_topic_legacy_line_seq_is_monotonic(self, tmp_path, offsets_dir):
+        """A legacy (no-_seq) line after a persisted-_seq line gets a greater _seq.
+
+        The fallback counter must track the topic high-water mark: when a line
+        carries a valid persisted _seq, the counter advances to at least that
+        value, so a subsequent legacy line is numbered above the last seen _seq
+        rather than from its position-in-this-read (which could collide with or
+        fall below the persisted value).
+        """
+        path = tmp_path / "mixed-seq.jsonl"
+        path.write_text(
+            json.dumps({"_seq": 100, "type": "persisted"})
+            + "\n"
+            + json.dumps({"type": "legacy"})
+            + "\n"
+        )
+
+        consumer = Consumer(
+            path=str(path),
+            mode="single-file",
+            group="g",
+            topic="mixed-seq",
+            offsets_dir=offsets_dir,
+        )
+        events = list(consumer)
+
+        seqs = [e["_seq"] for e in events]
+        # Persisted value preserved; legacy line numbered above it (monotonic,
+        # no collision). Position-in-read would have given the legacy line 2.
+        assert seqs[0] == 100
+        assert seqs[1] > 100
+        assert seqs[0] < seqs[1]

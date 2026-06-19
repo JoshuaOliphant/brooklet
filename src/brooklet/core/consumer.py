@@ -219,11 +219,17 @@ class Consumer:
                 if not line:
                     break
                 # Advance the fallback counter and hand it to wrap(). wrap()
-                # preserves any persisted _seq and uses this only when the line
-                # has none (legacy/external sources).
+                # preserves any valid persisted _seq and uses this only when the
+                # line has none (legacy/external sources).
                 self._fallback_seq += 1
                 event = wrap(line, seq=self._fallback_seq, source=self._source)
                 if event is not None:
+                    # Track the topic high-water mark: if this line carried a
+                    # persisted _seq above our counter, advance to it so a later
+                    # legacy line is numbered above the last seen _seq rather
+                    # than from position-in-this-read. Keeps _seq monotonic and
+                    # collision-free across mixed persisted/legacy sources.
+                    self._fallback_seq = max(self._fallback_seq, event["_seq"])
                     count += 1
                     yield event
         finally:

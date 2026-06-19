@@ -66,6 +66,25 @@ class TestWrap:
 
         assert result["_seq"] == 5
 
+    def test_wrap_non_int_seq_falls_back(self):
+        """A persisted _seq that is not a valid int gets the fallback, not garbage.
+
+        The EnvelopeMeta contract is _seq: int. An external/legacy line carrying
+        a non-int _seq (e.g. a string) must not flow through untouched — wrap()
+        treats it as having no usable persisted _seq and uses the supplied seq.
+        """
+        line = json.dumps({"_seq": "oops", "type": "hello"})
+        result = wrap(line, seq=7)
+
+        assert result["_seq"] == 7
+
+    def test_wrap_bool_seq_falls_back(self):
+        """A bool _seq is rejected too — bool is an int subclass but not a seq."""
+        line = json.dumps({"_seq": True, "type": "hello"})
+        result = wrap(line, seq=9)
+
+        assert result["_seq"] == 9
+
     def test_wrap_source_none_no_src_field(self):
         """When source is None and line has no _src, no _src is added."""
         line = json.dumps({"type": "hello"})

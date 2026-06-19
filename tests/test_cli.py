@@ -283,6 +283,34 @@ def test_cat_missing_topic(tmp_path):
     assert result.exit_code != 0
 
 
+def test_cat_mixed_topic_seq_is_monotonic(tmp_path):
+    """cat numbering tracks the topic high-water mark across mixed sources.
+
+    A persisted-_seq line followed by a legacy (no-_seq) line: the legacy line
+    must get a _seq above the persisted value, not its position-in-the-file.
+    """
+    external = tmp_path / "external.jsonl"
+    external.write_text(
+        json.dumps({"_seq": 100, "type": "persisted"})
+        + "\n"
+        + json.dumps({"type": "legacy"})
+        + "\n"
+    )
+    register = runner.invoke(
+        app,
+        ["register", "ext", str(external), "--stream-dir", str(tmp_path)],
+    )
+    assert register.exit_code == 0
+
+    result = runner.invoke(app, ["cat", "ext", "--stream-dir", str(tmp_path)])
+    assert result.exit_code == 0
+
+    lines = result.output.strip().split("\n")
+    seqs = [json.loads(line)["_seq"] for line in lines]
+    assert seqs[0] == 100
+    assert seqs[1] > 100
+
+
 def test_stream_dir_env_var(tmp_path, monkeypatch):
     monkeypatch.setenv("BROOKLET_DIR", str(tmp_path))
 
