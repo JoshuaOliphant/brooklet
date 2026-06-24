@@ -2,13 +2,13 @@
 # ABOUTME: Coordinates registry, consumer, and offset modules into a unified API
 
 import glob as glob_module
-import re
 from pathlib import Path
 
 from brooklet.contrib import otel
 from brooklet.core.consumer import Consumer
 from brooklet.core.envelope import serialize
 from brooklet.core.types import Mode
+from brooklet.storage import segments
 from brooklet.storage.locking import topic_lock
 from brooklet.storage.registry import Registry
 from brooklet.storage.sidecar import derive_next_seq, read_next_seq, write_next_seq
@@ -52,31 +52,29 @@ class Stream:
         data-0000.jsonl to migrate it into the segment numbering scheme.
         Sets self._segment_cache[topic] = (active_path, cached_size, seg_num).
         """
-        segments = sorted(glob_module.glob(str(topic_dir / "data-*.jsonl")))
+        existing = sorted(glob_module.glob(segments.glob_pattern(topic_dir)))
         bare = topic_dir / "data.jsonl"
 
-        if not segments and bare.exists():
+        if not existing and bare.exists():
             # Legacy migration: rename data.jsonl → data-0000.jsonl.
             # New writes start in data-0001.jsonl so 0000 is the historical archive.
-            migrated = topic_dir / "data-0000.jsonl"
-            bare.rename(migrated)
-            # Don't add to segments — fall through to brand-new topic logic at 0001
+            bare.rename(topic_dir / segments.filename(0))
+            # Don't add to existing — fall through to brand-new topic logic at 0001
             seg_num = 1
-            active = topic_dir / f"data-{seg_num:04d}.jsonl"
+            active = topic_dir / segments.filename(seg_num)
             active.touch()
             self._segment_cache[topic] = (active, 0, seg_num)
             return
 
-        if segments:
+        if existing:
             # Parse segment number from the last (active) segment
-            m = re.search(r"data-(\d+)\.jsonl$", segments[-1])
-            seg_num = int(m.group(1)) if m else 0
-            active = Path(segments[-1])
+            seg_num = segments.parse_number(existing[-1]) or 0
+            active = Path(existing[-1])
             size = active.stat().st_size
         else:
             # Brand new topic: start at segment 0001
             seg_num = 1
-            active = topic_dir / f"data-{seg_num:04d}.jsonl"
+            active = topic_dir / segments.filename(seg_num)
             active.touch()
             size = 0
 
@@ -139,7 +137,7 @@ class Stream:
                 # Rotate to next segment if the active one exceeds the size threshold
                 if cached_size >= max_segment_bytes:
                     seg_num += 1
-                    active_path = topic_dir / f"data-{seg_num:04d}.jsonl"
+                    active_path = topic_dir / segments.filename(seg_num)
                     active_path.touch()
                     cached_size = 0
 
@@ -166,8 +164,7 @@ class Stream:
                 self._segment_cache[topic] = (active_path, cached_size, seg_num)
 
             # Auto-register with glob pattern in the unified namespace
-            glob_pattern = str(topic_dir / "data-*.jsonl")
-            self._registry.register_local(topic, glob_pattern, mode="glob")
+            self._registry.register_local(topic, segments.glob_pattern(topic_dir), mode="glob")
             otel.meter.create_counter(
                 "brooklet.events_produced", description="Total events produced"
             ).add(1, {"topic": topic})

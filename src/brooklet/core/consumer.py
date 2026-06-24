@@ -6,7 +6,6 @@ import contextlib
 import fnmatch
 import glob as glob_module
 import logging
-import re
 import sys
 import warnings
 from collections.abc import Iterator
@@ -15,6 +14,7 @@ from pathlib import Path
 from brooklet.contrib import otel
 from brooklet.core.envelope import wrap
 from brooklet.core.types import Event, GlobOffset, Mode, SingleFileOffset
+from brooklet.storage import segments
 from brooklet.storage.offsets import load, save
 
 logger = logging.getLogger("brooklet")
@@ -30,19 +30,6 @@ def _drain_queue(q) -> None:
     """
     while not q.empty():
         q.get_nowait()
-
-
-# Matches local segment filenames produced by brooklet (e.g. data-0003.jsonl)
-_SEGMENT_RE = re.compile(r"data-(\d+)\.jsonl$")
-
-
-def _parse_segment_number(filepath: str) -> int | None:
-    """Extract segment number from a data-NNNN.jsonl filename.
-
-    Returns None for files that don't follow the segment naming convention.
-    """
-    m = _SEGMENT_RE.search(filepath)
-    return int(m.group(1)) if m else None
 
 
 def _find_start_index(segment_numbers: list[int], target_segment: int) -> int:
@@ -270,7 +257,7 @@ class Consumer:
             return
 
         # Determine whether all files follow the data-NNNN.jsonl convention
-        parsed = [_parse_segment_number(f) for f in files]
+        parsed = [segments.parse_number(f) for f in files]
         use_segments = all(sn is not None for sn in parsed)
 
         if use_segments:
@@ -481,7 +468,7 @@ class Consumer:
 
                     # Update GlobOffset: use segment number if the file follows
                     # the data-NNNN.jsonl convention, otherwise use positional index
-                    seg_num = _parse_segment_number(filepath)
+                    seg_num = segments.parse_number(filepath)
                     if seg_num is None:
                         all_files = sorted(self._file_positions.keys())
                         seg_num = all_files.index(filepath)

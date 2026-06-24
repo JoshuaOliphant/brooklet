@@ -672,19 +672,6 @@ class TestConsumerSegmentSearch:
                 f.write(json.dumps(event) + "\n")
         return str(path)
 
-    def test_segment_number_parsed_from_filename(self, tmp_path, offsets_dir):
-        """Consumer correctly parses data-0003.jsonl as segment 3."""
-        from brooklet.core.consumer import _parse_segment_number
-
-        assert _parse_segment_number("data-0003.jsonl") == 3
-        assert _parse_segment_number("/some/path/data-0001.jsonl") == 1
-        assert _parse_segment_number("/deep/path/data-0099.jsonl") == 99
-        assert _parse_segment_number("data-0000.jsonl") == 0
-        # Non-matching filenames return None
-        assert _parse_segment_number("a.jsonl") is None
-        assert _parse_segment_number("events.jsonl") is None
-        assert _parse_segment_number("data.jsonl") is None
-
     def test_binary_search_finds_correct_segment(self, tmp_path, offsets_dir):
         """With segments 1, 3, 5 (gap at 2, 4), offset at segment_number=3 starts at segment 3."""
         from brooklet.core.types import GlobOffset
