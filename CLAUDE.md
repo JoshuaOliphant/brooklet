@@ -23,6 +23,7 @@ Source layout uses three subpackages so directory names communicate intent (the 
 - `storage/registry.py` — Maps topic names to sources; supports external (registered) and local (produced)
 - `storage/segments.py` — Single source of truth for the `data-NNNN.jsonl` segment-file naming convention shared by producer and consumer
 - `storage/atomic.py` — `atomic_write_text()`: the crash-safe temp-file-then-`os.replace` write behind every JSON document under `.brooklet/`
+- `storage/names.py` — `validate_safe_name()`: the path-traversal / unsafe-character guard for topic and group names (shared by registry and offsets)
 
 #### `cli/` — Typer app and plugin loading
 - `cli/app.py` — Unified CLI entry point; Typer app with core commands and plugin loading. Re-exported as `brooklet.cli:main` (the package's `__init__.py` re-exports `app`, `main`, `_watch_impl`).

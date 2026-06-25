@@ -2,29 +2,14 @@
 # ABOUTME: Persists registrations in .brooklet/sources.json for cross-session use
 
 import json
-import re
 from pathlib import Path
 from typing import get_args
 
 from brooklet.core.types import Mode, SourceDef
 from brooklet.storage.atomic import atomic_write_text
+from brooklet.storage.names import validate_safe_name
 
 VALID_MODES: set[str] = set(get_args(Mode))
-
-_SAFE_NAME_RE = re.compile(r"^[a-zA-Z0-9_\-\./]+$")
-
-
-def _validate_topic_name(name: str) -> None:
-    """Reject topic names that could cause path traversal or filesystem issues."""
-    if not _SAFE_NAME_RE.match(name):
-        msg = (
-            f"topic name must contain only safe characters "
-            f"(alphanumeric, hyphens, underscores, dots, slashes), got {name!r}"
-        )
-        raise ValueError(msg)
-    if ".." in Path(name).parts:
-        msg = f"topic name must not contain path traversal (got {name!r})"
-        raise ValueError(msg)
 
 
 class Registry:
@@ -66,7 +51,7 @@ class Registry:
         Raises:
             ValueError: If mode is not "single-file" or "glob", or name is invalid.
         """
-        _validate_topic_name(name)
+        validate_safe_name(name, "topic name")
 
         if mode not in VALID_MODES:
             msg = f"mode must be one of {VALID_MODES}, got {mode!r}"
