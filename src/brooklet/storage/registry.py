@@ -1,15 +1,13 @@
 # ABOUTME: Source registration mapping external JSONL paths to topic names
 # ABOUTME: Persists registrations in .brooklet/sources.json for cross-session use
 
-import contextlib
 import json
-import os
 import re
-import tempfile
 from pathlib import Path
 from typing import get_args
 
 from brooklet.core.types import Mode, SourceDef
+from brooklet.storage.atomic import atomic_write_text
 
 VALID_MODES: set[str] = set(get_args(Mode))
 
@@ -55,23 +53,7 @@ class Registry:
 
     def _save(self) -> None:
         """Persist sources to disk atomically."""
-        self._brooklet_dir.mkdir(parents=True, exist_ok=True)
-        data = json.dumps(self._sources, indent=2)
-
-        fd, tmp_path = tempfile.mkstemp(dir=self._brooklet_dir, suffix=".tmp")
-        fd_closed = False
-        try:
-            os.write(fd, data.encode())
-            os.close(fd)
-            fd_closed = True
-            os.replace(tmp_path, self._sources_path)
-        except BaseException:
-            if not fd_closed:
-                with contextlib.suppress(OSError):
-                    os.close(fd)
-            if os.path.exists(tmp_path):
-                os.unlink(tmp_path)
-            raise
+        atomic_write_text(self._sources_path, json.dumps(self._sources, indent=2))
 
     def register(self, name: str, path: str, mode: Mode) -> None:
         """Register an external JSONL path as a named topic.

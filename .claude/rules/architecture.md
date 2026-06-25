@@ -36,6 +36,7 @@ Three subpackages, each a clear namespace boundary:
 - `storage/locking.py` — Topic-level file locking (flock) for single-writer enforcement.
 - `storage/registry.py` — Maps topic names to file paths. External (registered) and local (produced).
 - `storage/segments.py` — Owns the `data-NNNN.jsonl` segment-file naming convention (filename/parse/glob). Producer and consumer both route through it so the format can't drift.
+- `storage/atomic.py` — `atomic_write_text()`: crash-safe temp-file-then-`os.replace` write. Single home for the durability primitive used by offsets, sidecar, and registry.
 - `cli/app.py` — Unified CLI entry point. Typer app with core commands and plugin loading. Exposed as `brooklet.cli:main` via the package `__init__` re-export.
 - `cli/plugins.py` — Plugin system using pluggy for CLI extensibility. `hookimpl` is imported from here.
 - `cli/watch_format.py` — One-line-per-event formatter for `brooklet watch`.

@@ -1,12 +1,11 @@
 # ABOUTME: Consumer offset persistence for tracking read positions
 # ABOUTME: Stores byte offsets per consumer group in .brooklet/offsets/ directory
 
-import contextlib
 import json
-import os
 import re
-import tempfile
 from pathlib import Path
+
+from brooklet.storage.atomic import atomic_write_text
 
 _SAFE_NAME_RE = re.compile(r"^[a-zA-Z0-9_\-\./]+$")
 
@@ -67,24 +66,5 @@ def save(offsets_dir: str | Path, group: str, topic: str, offset: int) -> None:
     _validate_name(group, "group")
     _validate_name(topic, "topic")
 
-    offsets_dir = Path(offsets_dir)
-    offsets_dir.mkdir(parents=True, exist_ok=True)
-
-    path = _offset_path(offsets_dir, group, topic)
-    data = json.dumps({"offset": offset})
-
-    # Atomic write: write to temp file in the same directory, then rename
-    fd, tmp_path = tempfile.mkstemp(dir=offsets_dir, suffix=".tmp")
-    fd_closed = False
-    try:
-        os.write(fd, data.encode())
-        os.close(fd)
-        fd_closed = True
-        os.replace(tmp_path, path)
-    except BaseException:
-        if not fd_closed:
-            with contextlib.suppress(OSError):
-                os.close(fd)
-        if os.path.exists(tmp_path):
-            os.unlink(tmp_path)
-        raise
+    path = _offset_path(Path(offsets_dir), group, topic)
+    atomic_write_text(path, json.dumps({"offset": offset}))
