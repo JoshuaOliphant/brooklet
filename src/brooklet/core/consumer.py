@@ -137,6 +137,28 @@ class Consumer:
                 self._group,
             )
 
+    @contextlib.contextmanager
+    def _observe(self, watch_dir: str, handler) -> Iterator[None]:
+        """Run a watchdog observer over watch_dir for the duration of the block.
+
+        Schedules `handler` (a FileSystemEventHandler) non-recursively, starts
+        the observer, records it on self._observer so close() can stop it from
+        another thread, and guarantees the observer is stopped on exit. The
+        body owns the tailing loop; anything it must persist on exit (e.g. a
+        final offset save) belongs in its own try/finally inside the `with`, so
+        it runs before the observer is torn down.
+        """
+        from watchdog.observers import Observer
+
+        observer = Observer()
+        observer.schedule(handler, watch_dir, recursive=False)
+        observer.start()
+        self._observer = observer
+        try:
+            yield
+        finally:
+            self._stop_observer(observer)
+
     def __iter__(self) -> Iterator[Event]:
         return self._iterate()
 
@@ -389,7 +411,6 @@ class Consumer:
         import queue
 
         from watchdog.events import FileSystemEventHandler
-        from watchdog.observers import Observer
 
         assert isinstance(self._offset, GlobOffset)
 
@@ -412,76 +433,72 @@ class Consumer:
                 if not event.is_directory and fnmatch.fnmatch(event.src_path, glob_pattern):
                     event_queue.put(("created", event.src_path))
 
-        observer = Observer()
-        observer.schedule(GlobHandler(), watch_dir, recursive=False)
-        observer.start()
-        self._observer = observer
+        with self._observe(watch_dir, GlobHandler()):
+            try:
+                while not self._closed:
+                    try:
+                        action, filepath = event_queue.get(timeout=0.5)
+                    except queue.Empty:
+                        # Poll all known files even without a watchdog event —
+                        # macOS FSEvents coalesces rapid writes.
+                        for filepath in list(self._file_positions):
+                            known_pos = self._file_positions.get(filepath, 0)
+                            try:
+                                with open(filepath) as f:
+                                    f.seek(known_pos)
+                                    yield from self._read_lines(f)
+                                    self._file_positions[filepath] = f.tell()
+                            except OSError:
+                                pass
+                        continue
 
-        try:
-            while not self._closed:
-                try:
-                    action, filepath = event_queue.get(timeout=0.5)
-                except queue.Empty:
-                    # Poll all known files even without a watchdog event —
-                    # macOS FSEvents coalesces rapid writes.
-                    for filepath in list(self._file_positions):
+                    # Drain the queue to batch process notifications. The queue
+                    # only has one producer (the watchdog handler), so empty() is
+                    # reliable here — get_nowait() cannot race against a remover.
+                    pending = [(action, filepath)]
+                    while not event_queue.empty():
+                        pending.append(event_queue.get_nowait())
+
+                    for _action, filepath in pending:
                         known_pos = self._file_positions.get(filepath, 0)
+
                         try:
                             with open(filepath) as f:
                                 f.seek(known_pos)
                                 yield from self._read_lines(f)
                                 self._file_positions[filepath] = f.tell()
-                        except OSError:
-                            pass
-                    continue
+                        except OSError as e:
+                            logger.warning(
+                                "Skipping file %s during glob+follow (topic=%s, group=%s): %s",
+                                filepath,
+                                self._topic,
+                                self._group,
+                                e,
+                            )
+                            continue
 
-                # Drain the queue to batch process notifications. The queue
-                # only has one producer (the watchdog handler), so empty() is
-                # reliable here — get_nowait() cannot race against a remover.
-                pending = [(action, filepath)]
-                while not event_queue.empty():
-                    pending.append(event_queue.get_nowait())
-
-                for _action, filepath in pending:
-                    known_pos = self._file_positions.get(filepath, 0)
-
-                    try:
-                        with open(filepath) as f:
-                            f.seek(known_pos)
-                            yield from self._read_lines(f)
-                            self._file_positions[filepath] = f.tell()
-                    except OSError as e:
-                        logger.warning(
-                            "Skipping file %s during glob+follow (topic=%s, group=%s): %s",
-                            filepath,
-                            self._topic,
-                            self._group,
-                            e,
+                        # Update GlobOffset: use segment number if the file follows
+                        # the data-NNNN.jsonl convention, otherwise use positional index
+                        seg_num = segments.parse_number(filepath)
+                        if seg_num is None:
+                            all_files = sorted(self._file_positions.keys())
+                            seg_num = all_files.index(filepath)
+                        self._offset = GlobOffset(
+                            segment_number=seg_num,
+                            byte_offset=self._file_positions[filepath],
                         )
-                        continue
 
-                    # Update GlobOffset: use segment number if the file follows
-                    # the data-NNNN.jsonl convention, otherwise use positional index
-                    seg_num = segments.parse_number(filepath)
-                    if seg_num is None:
-                        all_files = sorted(self._file_positions.keys())
-                        seg_num = all_files.index(filepath)
-                    self._offset = GlobOffset(
-                        segment_number=seg_num,
-                        byte_offset=self._file_positions[filepath],
-                    )
-
+                    self._save_offset()
+            finally:
+                # Runs before _observe stops the observer, preserving the
+                # save-then-stop order the previous explicit finally had.
                 self._save_offset()
-        finally:
-            self._save_offset()
-            self._stop_observer(observer)
 
     def _iterate_follow(self, f, path):
         """Tail a file using watchdog for filesystem events."""
         import queue
 
         from watchdog.events import FileSystemEventHandler
-        from watchdog.observers import Observer
 
         event_queue = queue.Queue()
 
@@ -490,12 +507,7 @@ class Consumer:
                 if Path(event.src_path).resolve() == path.resolve():
                     event_queue.put(True)
 
-        observer = Observer()
-        observer.schedule(Handler(), str(path.parent), recursive=False)
-        observer.start()
-        self._observer = observer
-
-        try:
+        with self._observe(str(path.parent), Handler()):
             # First, read any existing lines
             yield from self._read_lines(f)
 
@@ -509,8 +521,6 @@ class Consumer:
                 _drain_queue(event_queue)
 
                 yield from self._read_lines(f)
-        finally:
-            self._stop_observer(observer)
 
     def close(self) -> None:
         """Stop the consumer and save the current offset."""
