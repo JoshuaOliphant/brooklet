@@ -231,7 +231,7 @@ def cat(
     """Dump all events from a topic without advancing offsets (read-only)."""
     stream = brooklet.open(stream_dir)
 
-    def _warn(fp: str, err: OSError) -> None:
+    def _warn(fp: str, err: OSError | UnicodeDecodeError) -> None:
         typer.echo(f"Warning: cannot read {fp}: {err}", err=True)
 
     try:

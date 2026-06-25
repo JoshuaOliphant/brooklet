@@ -201,7 +201,7 @@ class Stream:
     def read(
         self,
         topic: str,
-        on_read_error: Callable[[str, OSError], None] | None = None,
+        on_read_error: Callable[[str, OSError | UnicodeDecodeError], None] | None = None,
     ) -> Iterator[Event]:
         """Yield every event from a topic without advancing any consumer offset.
 
@@ -214,9 +214,10 @@ class Stream:
         Args:
             topic: Registered topic name.
             on_read_error: Optional callback invoked as ``(filepath, error)`` when
-                a backing file cannot be read. Defaults to logging a warning. The
-                file is skipped either way, so one unreadable segment never aborts
-                the scan.
+                a backing file cannot be read or decoded (OSError or a
+                UnicodeDecodeError from non-UTF-8 content). Defaults to logging a
+                warning. The file is skipped either way, so one unreadable segment
+                never aborts the scan.
 
         Yields:
             Event dicts with envelope fields.
@@ -240,7 +241,10 @@ class Stream:
                         event = tracker.wrap(line)
                         if event is not None:
                             yield event
-            except OSError as e:
+            except (OSError, UnicodeDecodeError) as e:
+                # OSError: missing/unreadable file. UnicodeDecodeError: the file
+                # exists but holds non-UTF-8 bytes — surfaced lazily by the line
+                # iterator. Both skip the file rather than aborting the whole scan.
                 if on_read_error is not None:
                     on_read_error(fp, e)
                 else:

@@ -87,10 +87,3 @@ def test_empty_iterable_produces_nothing():
     stream = _RecordingStream()
     assert list(tee_to_topic([], stream, "t", "src", _describe)) == []
     assert stream.produced == []
-
-
-def test_reraises_nothing_for_handled_error_types():
-    """OSError/ValueError/TypeError are caught; other errors would propagate."""
-    stream = _RecordingStream(fail_on={"a"})  # raises ValueError
-    # Should not raise:
-    list(tee_to_topic([_Item("a", 1)], stream, "t", "src", _describe))

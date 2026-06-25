@@ -213,3 +213,24 @@ class TestStreamRead:
 
         assert events == []
         assert any("Cannot read" in r.message for r in caplog.records)
+
+    def test_read_non_utf8_file_is_skipped_not_aborted(self, tmp_path):
+        """A non-UTF-8 backing file raises UnicodeDecodeError mid-scan; read() must
+        route it to on_read_error and continue, not abort (matches the docstring)."""
+        bad = tmp_path / "bad.jsonl"
+        bad.write_bytes(b"\xff\xfe not valid utf-8\n")
+        good = tmp_path / "good.jsonl"
+        good.write_text(json.dumps({"ok": True}) + "\n")
+
+        stream = brooklet.open(tmp_path)
+        # Glob mode so both files back one topic; bad sorts before good.
+        stream.register("mixed", str(tmp_path / "*.jsonl"), "glob")
+
+        seen: list[tuple[str, BaseException]] = []
+        events = list(stream.read("mixed", on_read_error=lambda fp, e: seen.append((fp, e))))
+
+        # The good file's event still came through despite the bad file.
+        assert [e["ok"] for e in events] == [True]
+        assert len(seen) == 1
+        assert seen[0][0].endswith("bad.jsonl")
+        assert isinstance(seen[0][1], UnicodeDecodeError)
