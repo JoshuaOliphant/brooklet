@@ -2,16 +2,20 @@
 # ABOUTME: Coordinates registry, consumer, and offset modules into a unified API
 
 import glob as glob_module
+import logging
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 from brooklet.contrib import otel
 from brooklet.core.consumer import Consumer
-from brooklet.core.envelope import serialize
-from brooklet.core.types import Mode
+from brooklet.core.envelope import SeqTracker, serialize
+from brooklet.core.types import Event, Mode
 from brooklet.storage import segments
 from brooklet.storage.locking import topic_lock
 from brooklet.storage.registry import Registry
 from brooklet.storage.sidecar import derive_next_seq, read_next_seq, write_next_seq
+
+logger = logging.getLogger("brooklet")
 
 
 class Stream:
@@ -193,6 +197,54 @@ class Stream:
             source=topic,
             follow=follow,
         )
+
+    def read(
+        self,
+        topic: str,
+        on_read_error: Callable[[str, OSError], None] | None = None,
+    ) -> Iterator[Event]:
+        """Yield every event from a topic without advancing any consumer offset.
+
+        A read-only full scan: unlike consume(), it tracks no offset and can be
+        called repeatedly to re-read the same events from the start. Envelope
+        fields are injected the same way — a topic-monotonic _seq set at produce
+        time is preserved, while legacy/external lines without one get a
+        high-water-mark fallback (see SeqTracker).
+
+        Args:
+            topic: Registered topic name.
+            on_read_error: Optional callback invoked as ``(filepath, error)`` when
+                a backing file cannot be read. Defaults to logging a warning. The
+                file is skipped either way, so one unreadable segment never aborts
+                the scan.
+
+        Yields:
+            Event dicts with envelope fields.
+
+        Raises:
+            KeyError: If the topic is not registered.
+        """
+        source = self._registry.get(topic)
+        if source["mode"] == "glob":
+            paths = sorted(glob_module.glob(source["path"]))
+        else:
+            paths = [source["path"]]
+
+        # One tracker spans every segment so fallback _seq stays monotonic across
+        # files — the same contract Consumer holds for a topic's whole read.
+        tracker = SeqTracker(source=topic)
+        for fp in paths:
+            try:
+                with open(fp) as f:
+                    for line in f:
+                        event = tracker.wrap(line)
+                        if event is not None:
+                            yield event
+            except OSError as e:
+                if on_read_error is not None:
+                    on_read_error(fp, e)
+                else:
+                    logger.warning("Cannot read %s (topic=%s): %s", fp, topic, e)
 
     def topics(self) -> list[str]:
         """Return names of all registered topics."""

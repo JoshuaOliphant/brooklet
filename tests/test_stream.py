@@ -5,6 +5,8 @@ import json
 import os
 import warnings
 
+import pytest
+
 import brooklet
 from brooklet.core.stream import Stream
 
@@ -153,3 +155,61 @@ class TestStreamRelativePathResolution:
             "Consumer found no events — relative path in sources.json"
             " not resolved against stream_dir"
         )
+
+
+class TestStreamRead:
+    def test_read_yields_all_events_without_advancing_offset(self, tmp_path):
+        """read() is a full scan: repeated calls re-read the same events."""
+        stream = brooklet.open(tmp_path)
+        stream.produce("t", {"n": 1})
+        stream.produce("t", {"n": 2})
+
+        first = [e["n"] for e in stream.read("t")]
+        second = [e["n"] for e in stream.read("t")]
+
+        assert first == [1, 2]
+        assert second == [1, 2]
+
+    def test_read_unregistered_topic_raises_keyerror(self, tmp_path):
+        stream = brooklet.open(tmp_path)
+        with pytest.raises(KeyError):
+            list(stream.read("nope"))
+
+    def test_read_seq_monotonic_across_mixed_sources(self, tmp_path):
+        """A legacy line after a persisted-_seq line is numbered above it."""
+        external = tmp_path / "ext.jsonl"
+        external.write_text(
+            json.dumps({"_seq": 100, "type": "persisted"})
+            + "\n"
+            + json.dumps({"type": "legacy"})
+            + "\n"
+        )
+        stream = brooklet.open(tmp_path)
+        stream.register("ext", str(external), "single-file")
+
+        seqs = [e["_seq"] for e in stream.read("ext")]
+        assert seqs[0] == 100
+        assert seqs[1] > 100
+
+    def test_read_error_callback_invoked_on_unreadable_file(self, tmp_path):
+        stream = brooklet.open(tmp_path)
+        stream.register("ghost", str(tmp_path / "missing.jsonl"), "single-file")
+
+        seen: list[tuple[str, OSError]] = []
+        events = list(stream.read("ghost", on_read_error=lambda fp, e: seen.append((fp, e))))
+
+        assert events == []
+        assert len(seen) == 1
+        assert seen[0][0].endswith("missing.jsonl")
+        assert isinstance(seen[0][1], OSError)
+
+    def test_read_logs_warning_on_unreadable_file_by_default(self, tmp_path, caplog):
+        """With no callback, an unreadable file is logged and skipped, not raised."""
+        stream = brooklet.open(tmp_path)
+        stream.register("ghost", str(tmp_path / "missing.jsonl"), "single-file")
+
+        with caplog.at_level("WARNING", logger="brooklet"):
+            events = list(stream.read("ghost"))
+
+        assert events == []
+        assert any("Cannot read" in r.message for r in caplog.records)

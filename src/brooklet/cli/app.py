@@ -230,33 +230,16 @@ def cat(
 ) -> None:
     """Dump all events from a topic without advancing offsets (read-only)."""
     stream = brooklet.open(stream_dir)
+
+    def _warn(fp: str, err: OSError) -> None:
+        typer.echo(f"Warning: cannot read {fp}: {err}", err=True)
+
     try:
-        source = stream._registry.get(topic)
+        for event in stream.read(topic, on_read_error=_warn):
+            typer.echo(json.dumps(event))
     except KeyError:
         typer.echo(f"Error: topic {topic!r} is not registered", err=True)
         raise typer.Exit(code=1) from None
-
-    import glob as glob_module
-
-    from brooklet.core.envelope import SeqTracker
-
-    file_path = source["path"]
-    file_mode = source["mode"]
-
-    filepaths = sorted(glob_module.glob(file_path)) if file_mode == "glob" else [file_path]
-
-    # One tracker spans every segment file so legacy/external lines without a
-    # persisted _seq stay monotonic across files (same contract as Consumer).
-    tracker = SeqTracker(source=topic)
-    for fp in filepaths:
-        try:
-            with open(fp) as f:
-                for line in f:
-                    event = tracker.wrap(line)
-                    if event is not None:
-                        typer.echo(json.dumps(event))
-        except OSError as e:
-            typer.echo(f"Warning: cannot read {fp}: {e}", err=True)
 
 
 def _load_plugins() -> None:
