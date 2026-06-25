@@ -7,7 +7,10 @@ paths:
 
 Contrib adapters follow the **3-layer pattern**:
 1. **Parsing** — Extract structured data from raw JSONL
-2. **Consumer integration** — Wire into brooklet's consume/produce pipeline
+2. **Consumer integration** — Wire into brooklet's consume/produce pipeline.
+   For `--output` mode (mirror parsed stats into a topic), use the shared
+   `contrib/topic_tee.py:tee_to_topic()` passthrough sink rather than hand-rolling
+   a produce-and-warn generator.
 3. **CLI** — Provide a `scan` subcommand via typer
 
 See existing adapters for reference:

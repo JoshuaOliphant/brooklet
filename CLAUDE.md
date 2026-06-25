@@ -34,6 +34,7 @@ Source layout uses three subpackages so directory names communicate intent (the 
 - `contrib/claude_analytics.py` — Claude Code session analytics (`brooklet scout scan`)
 - `contrib/pytest_analytics.py` — pytest-reportlog test run analytics (`brooklet pytest scan`)
 - `contrib/otel.py` — Optional OpenTelemetry instrumentation (tracing + metrics); no-op without SDK
+- `contrib/topic_tee.py` — `tee_to_topic()`: shared passthrough sink for scan commands' `--output` mode (produce each stat to a topic, warn-not-raise on failure)
 
 ### Key Decisions
 - `produce()` is in core — consumers that transform and re-emit need a clean write path (DEC-011)
