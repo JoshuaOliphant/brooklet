@@ -17,6 +17,7 @@ import typer
 
 import brooklet
 from brooklet.cli.plugins import hookimpl
+from brooklet.contrib.topic_tee import tee_to_topic
 
 # ---------------------------------------------------------------------------
 # Layer 1: Parsing (pure functions, no I/O)
@@ -635,21 +636,13 @@ class ScoutPlugin:
 
             if output:
                 stream = brooklet.open(stream_dir or path)
-                original_iter = stats_iter
-
-                def producing_iter():
-                    for stats in original_iter:
-                        try:
-                            stream.produce(output, stats.to_dict(), source="scout")
-                        except (OSError, ValueError, TypeError) as e:
-                            typer.echo(
-                                f"Warning: failed to produce session {stats.session_id} "
-                                f"to topic {output!r}: {e}",
-                                err=True,
-                            )
-                        yield stats
-
-                stats_iter = producing_iter()
+                stats_iter = tee_to_topic(
+                    stats_iter,
+                    stream,
+                    output,
+                    source="scout",
+                    describe=lambda s: f"session {s.session_id}",
+                )
 
             try:
                 if dashboard:

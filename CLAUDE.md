@@ -11,9 +11,9 @@ Source layout uses three subpackages so directory names communicate intent (the 
 - `__init__.py` — Public API: `brooklet.open(path)`
 
 #### `core/` — primitives + main code paths
-- `core/envelope.py` — Metadata injection (_ts, _seq, _src): `wrap()` on read, `serialize()` on write
+- `core/envelope.py` — Metadata injection (_ts, _seq, _src): `wrap()` on read, `serialize()` on write, `SeqTracker` for high-water-mark fallback _seq across a topic's read
 - `core/types.py` — Shared type definitions (Mode, Event, offset dataclasses, SourceDef)
-- `core/stream.py` — Orchestrator: `register()`, `produce()`, `consume()`, `topics()`. Segment rotation + sidecar + flock
+- `core/stream.py` — Orchestrator: `register()`, `produce()`, `consume()`, `read()`, `topics()`. Segment rotation + sidecar + flock
 - `core/consumer.py` — Batch and follow-mode iterators over JSONL files
 
 #### `storage/` — persistence layer (everything under `.brooklet/`)
@@ -21,6 +21,9 @@ Source layout uses three subpackages so directory names communicate intent (the 
 - `storage/sidecar.py` — Sequence number sidecar cache for O(1) next-seq lookups with crash recovery
 - `storage/locking.py` — Topic-level file locking via `fcntl.flock(LOCK_EX|LOCK_NB)` for single-writer enforcement
 - `storage/registry.py` — Maps topic names to sources; supports external (registered) and local (produced)
+- `storage/segments.py` — Single source of truth for the `data-NNNN.jsonl` segment-file naming convention shared by producer and consumer
+- `storage/atomic.py` — `atomic_write_text()`: the crash-safe temp-file-then-`os.replace` write behind every JSON document under `.brooklet/`
+- `storage/names.py` — `validate_safe_name()`: the path-traversal / unsafe-character guard for topic and group names (shared by registry and offsets)
 
 #### `cli/` — Typer app and plugin loading
 - `cli/app.py` — Unified CLI entry point; Typer app with core commands and plugin loading. Re-exported as `brooklet.cli:main` (the package's `__init__.py` re-exports `app`, `main`, `_watch_impl`).
@@ -31,6 +34,7 @@ Source layout uses three subpackages so directory names communicate intent (the 
 - `contrib/claude_analytics.py` — Claude Code session analytics (`brooklet scout scan`)
 - `contrib/pytest_analytics.py` — pytest-reportlog test run analytics (`brooklet pytest scan`)
 - `contrib/otel.py` — Optional OpenTelemetry instrumentation (tracing + metrics); no-op without SDK
+- `contrib/topic_tee.py` — `tee_to_topic()`: shared passthrough sink for scan commands' `--output` mode (produce each stat to a topic, warn-not-raise on failure)
 
 ### Key Decisions
 - `produce()` is in core — consumers that transform and re-emit need a clean write path (DEC-011)

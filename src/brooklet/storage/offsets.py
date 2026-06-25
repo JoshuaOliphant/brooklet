@@ -1,27 +1,11 @@
 # ABOUTME: Consumer offset persistence for tracking read positions
 # ABOUTME: Stores byte offsets per consumer group in .brooklet/offsets/ directory
 
-import contextlib
 import json
-import os
-import re
-import tempfile
 from pathlib import Path
 
-_SAFE_NAME_RE = re.compile(r"^[a-zA-Z0-9_\-\./]+$")
-
-
-def _validate_name(value: str, label: str) -> None:
-    """Reject names that could cause path traversal or filesystem issues."""
-    if not _SAFE_NAME_RE.match(value):
-        msg = (
-            f"{label} must contain only safe characters "
-            f"(alphanumeric, hyphens, underscores, dots, slashes), got {value!r}"
-        )
-        raise ValueError(msg)
-    if ".." in Path(value).parts:
-        msg = f"{label} must not contain path traversal (got {value!r})"
-        raise ValueError(msg)
+from brooklet.storage.atomic import atomic_write_text
+from brooklet.storage.names import validate_safe_name
 
 
 def _offset_path(offsets_dir: Path, group: str, topic: str) -> Path:
@@ -41,8 +25,8 @@ def load(offsets_dir: str | Path, group: str, topic: str) -> int:
     Raises:
         ValueError: If the offset file is corrupt or names contain unsafe characters.
     """
-    _validate_name(group, "group")
-    _validate_name(topic, "topic")
+    validate_safe_name(group, "group")
+    validate_safe_name(topic, "topic")
 
     path = _offset_path(Path(offsets_dir), group, topic)
     if not path.exists():
@@ -64,27 +48,8 @@ def save(offsets_dir: str | Path, group: str, topic: str, offset: int) -> None:
     Uses atomic write (tmp file + os.replace) to prevent corruption.
     Creates parent directories if they don't exist.
     """
-    _validate_name(group, "group")
-    _validate_name(topic, "topic")
+    validate_safe_name(group, "group")
+    validate_safe_name(topic, "topic")
 
-    offsets_dir = Path(offsets_dir)
-    offsets_dir.mkdir(parents=True, exist_ok=True)
-
-    path = _offset_path(offsets_dir, group, topic)
-    data = json.dumps({"offset": offset})
-
-    # Atomic write: write to temp file in the same directory, then rename
-    fd, tmp_path = tempfile.mkstemp(dir=offsets_dir, suffix=".tmp")
-    fd_closed = False
-    try:
-        os.write(fd, data.encode())
-        os.close(fd)
-        fd_closed = True
-        os.replace(tmp_path, path)
-    except BaseException:
-        if not fd_closed:
-            with contextlib.suppress(OSError):
-                os.close(fd)
-        if os.path.exists(tmp_path):
-            os.unlink(tmp_path)
-        raise
+    path = _offset_path(Path(offsets_dir), group, topic)
+    atomic_write_text(path, json.dumps({"offset": offset}))

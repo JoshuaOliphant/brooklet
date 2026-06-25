@@ -27,14 +27,17 @@ Three subpackages, each a clear namespace boundary:
 
 ## Module Responsibilities
 
-- `core/envelope.py` — `wrap()` on read, `serialize()` on write. Preserves existing `_ts` and `_src`; always sets `_seq`.
+- `core/envelope.py` — `wrap()` on read, `serialize()` on write. Preserves existing `_ts` and `_src`; always sets `_seq`. `SeqTracker` owns the high-water-mark fallback-`_seq` invariant for a topic's whole read (used by both `Consumer` and `Stream.read`).
 - `core/types.py` — Shared type definitions (Mode, Event, offset dataclasses, SourceDef).
-- `core/stream.py` — Orchestrator. The only module that coordinates the others.
-- `core/consumer.py` — Batch and follow-mode iterators. Uses watchdog for tailing.
+- `core/stream.py` — Orchestrator. The only module that coordinates the others. `read()` is the offset-less full-scan counterpart to `consume()`.
+- `core/consumer.py` — Batch and follow-mode iterators. Uses watchdog for tailing via the `_observe` context manager (single home for observer lifecycle).
 - `storage/offsets.py` — Byte offset persistence. One file per consumer group per topic.
 - `storage/sidecar.py` — Sequence number sidecar cache for O(1) next-seq lookups.
 - `storage/locking.py` — Topic-level file locking (flock) for single-writer enforcement.
 - `storage/registry.py` — Maps topic names to file paths. External (registered) and local (produced).
+- `storage/segments.py` — Owns the `data-NNNN.jsonl` segment-file naming convention (filename/parse/glob). Producer and consumer both route through it so the format can't drift.
+- `storage/atomic.py` — `atomic_write_text()`: crash-safe temp-file-then-`os.replace` write. Single home for the durability primitive used by offsets, sidecar, and registry.
+- `storage/names.py` — `validate_safe_name()`: rejects path traversal / unsafe characters in names that become filesystem paths. Shared by registry and offsets.
 - `cli/app.py` — Unified CLI entry point. Typer app with core commands and plugin loading. Exposed as `brooklet.cli:main` via the package `__init__` re-export.
 - `cli/plugins.py` — Plugin system using pluggy for CLI extensibility. `hookimpl` is imported from here.
 - `cli/watch_format.py` — One-line-per-event formatter for `brooklet watch`.

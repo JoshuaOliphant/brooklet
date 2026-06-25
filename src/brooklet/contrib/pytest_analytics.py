@@ -14,6 +14,7 @@ import typer
 
 import brooklet
 from brooklet.cli.plugins import hookimpl
+from brooklet.contrib.topic_tee import tee_to_topic
 from brooklet.core.types import Mode
 
 RECOGNIZED_REPORT_TYPES = {"SessionStart", "CollectReport", "TestReport", "SessionFinish"}
@@ -346,21 +347,13 @@ class PytestPlugin:
                 stats_iter = scan_runs(path=path, mode=mode, follow=follow, stream=stream)
 
                 if output:
-                    original_iter = stats_iter
-
-                    def producing_iter():
-                        for stats in original_iter:
-                            try:
-                                stream.produce(output, stats.to_dict(), source="pytest-analytics")
-                            except (OSError, ValueError, TypeError) as e:
-                                typer.echo(
-                                    f"Warning: failed to produce run {stats.run_id} "
-                                    f"to topic {output!r}: {e}",
-                                    err=True,
-                                )
-                            yield stats
-
-                    stats_iter = producing_iter()
+                    stats_iter = tee_to_topic(
+                        stats_iter,
+                        stream,
+                        output,
+                        source="pytest-analytics",
+                        describe=lambda s: f"run {s.run_id}",
+                    )
 
                 for stats in stats_iter:
                     runs.append(stats)

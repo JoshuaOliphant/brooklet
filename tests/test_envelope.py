@@ -3,7 +3,7 @@
 
 import json
 
-from brooklet.core.envelope import wrap
+from brooklet.core.envelope import SeqTracker, wrap
 
 
 class TestWrap:
@@ -101,3 +101,45 @@ class TestWrap:
         from datetime import datetime
 
         datetime.fromisoformat(result["_ts"])
+
+
+class TestSeqTracker:
+    def test_assigns_incrementing_fallback_for_legacy_lines(self):
+        """Lines without a persisted _seq get a 1-based incrementing fallback."""
+        tracker = SeqTracker()
+        a = tracker.wrap(json.dumps({"type": "a"}))
+        b = tracker.wrap(json.dumps({"type": "b"}))
+
+        assert a["_seq"] == 1
+        assert b["_seq"] == 2
+
+    def test_preserves_persisted_seq(self):
+        """A valid persisted _seq flows through unchanged."""
+        tracker = SeqTracker()
+        result = tracker.wrap(json.dumps({"type": "a", "_seq": 42}))
+
+        assert result["_seq"] == 42
+
+    def test_advances_high_water_mark_past_persisted_seq(self):
+        """A legacy line after a persisted _seq is numbered above it, not from position."""
+        tracker = SeqTracker()
+        tracker.wrap(json.dumps({"type": "a", "_seq": 100}))
+        legacy = tracker.wrap(json.dumps({"type": "b"}))  # no _seq
+
+        # Without high-water tracking this would be 2; it must exceed 100.
+        assert legacy["_seq"] == 101
+
+    def test_passes_source_through(self):
+        """The configured source is applied as _src when the line lacks one."""
+        tracker = SeqTracker(source="topic-x")
+        result = tracker.wrap(json.dumps({"type": "a"}))
+
+        assert result["_src"] == "topic-x"
+
+    def test_invalid_line_returns_none_and_still_counts(self):
+        """A malformed line yields None; the counter still advanced for it."""
+        tracker = SeqTracker()
+        assert tracker.wrap("not json") is None
+        # The next valid line is numbered after the consumed slot.
+        result = tracker.wrap(json.dumps({"type": "a"}))
+        assert result["_seq"] == 2

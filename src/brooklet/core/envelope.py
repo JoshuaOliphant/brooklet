@@ -73,6 +73,36 @@ def wrap(line: str, seq: int, source: str | None = None) -> Event | None:
     return event
 
 
+class SeqTracker:
+    """Wraps a stream of JSONL lines, supplying a fallback _seq when needed.
+
+    Produced lines already carry a topic-monotonic _seq assigned at produce
+    time, which wrap() preserves. This tracker only matters for legacy/external
+    lines that carry no valid persisted _seq: it hands wrap() a monotonically
+    increasing fallback, then advances its counter to the high-water mark of
+    every _seq it has seen. That way a legacy line following a persisted-_seq
+    line is numbered *above* the last seen _seq — keeping _seq monotonic and
+    collision-free across mixed persisted/legacy sources, rather than restarting
+    from position-in-this-read.
+
+    The counter is stateful across calls, so a single tracker must span the
+    whole logical read of a topic (e.g. every segment file a glob consumer
+    walks), not be recreated per file.
+    """
+
+    def __init__(self, source: str | None = None) -> None:
+        self._seq = 0
+        self._source = source
+
+    def wrap(self, line: str) -> Event | None:
+        """Wrap one line, advancing the high-water mark. Returns None if invalid."""
+        self._seq += 1
+        event = wrap(line, seq=self._seq, source=self._source)
+        if event is not None:
+            self._seq = max(self._seq, event["_seq"])
+        return event
+
+
 def serialize(event: dict, seq: int, source: str | None = None) -> str:
     """Serialize a dict to a JSON line with envelope fields.
 

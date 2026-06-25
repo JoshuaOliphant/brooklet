@@ -230,41 +230,16 @@ def cat(
 ) -> None:
     """Dump all events from a topic without advancing offsets (read-only)."""
     stream = brooklet.open(stream_dir)
+
+    def _warn(fp: str, err: OSError | UnicodeDecodeError) -> None:
+        typer.echo(f"Warning: cannot read {fp}: {err}", err=True)
+
     try:
-        source = stream._registry.get(topic)
+        for event in stream.read(topic, on_read_error=_warn):
+            typer.echo(json.dumps(event))
     except KeyError:
         typer.echo(f"Error: topic {topic!r} is not registered", err=True)
         raise typer.Exit(code=1) from None
-
-    import glob as glob_module
-
-    from brooklet.core.envelope import wrap
-
-    file_path = source["path"]
-    file_mode = source["mode"]
-
-    filepaths = sorted(glob_module.glob(file_path)) if file_mode == "glob" else [file_path]
-
-    # Fallback sequence counter, same role as Consumer._fallback_seq: used only
-    # for legacy/external lines that carry no valid persisted _seq. It tracks the
-    # topic high-water mark so a legacy line after a persisted-_seq line is
-    # numbered above the last seen _seq (monotonic, collision-free across mixed
-    # sources) rather than from its position in the file.
-    fallback_seq = 0
-    for fp in filepaths:
-        try:
-            with open(fp) as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    fallback_seq += 1
-                    event = wrap(line, seq=fallback_seq, source=topic)
-                    if event is not None:
-                        fallback_seq = max(fallback_seq, event["_seq"])
-                        typer.echo(json.dumps(event))
-        except OSError as e:
-            typer.echo(f"Warning: cannot read {fp}: {e}", err=True)
 
 
 def _load_plugins() -> None:

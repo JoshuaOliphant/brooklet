@@ -1,11 +1,10 @@
 # ABOUTME: Sequence number sidecar cache for O(1) next-seq lookups
 # ABOUTME: Stores {"next_seq": N} in .brooklet/seq/<topic>.json with crash recovery
 
-import contextlib
 import json
-import os
-import tempfile
 from pathlib import Path
+
+from brooklet.storage.atomic import atomic_write_text
 
 
 def _sidecar_path(brooklet_dir: Path, topic: str) -> Path:
@@ -38,30 +37,10 @@ def read_next_seq(brooklet_dir: Path, topic: str) -> int | None:
 def write_next_seq(brooklet_dir: Path, topic: str, next_seq: int) -> None:
     """Write next_seq to the sidecar cache atomically.
 
-    Uses tempfile.mkstemp + os.replace for crash safety — same pattern
-    as offsets.py. Creates .brooklet/seq/ directory if it doesn't exist.
+    Crash-safe via atomic_write_text. Creates .brooklet/seq/ if it doesn't exist.
     """
-    seq_dir = brooklet_dir / "seq"
-    seq_dir.mkdir(parents=True, exist_ok=True)
-
     path = _sidecar_path(brooklet_dir, topic)
-    data = json.dumps({"next_seq": next_seq})
-
-    # Atomic write: write to temp file in the same directory, then rename
-    fd, tmp_path = tempfile.mkstemp(dir=seq_dir, suffix=".tmp")
-    fd_closed = False
-    try:
-        os.write(fd, data.encode())
-        os.close(fd)
-        fd_closed = True
-        os.replace(tmp_path, path)
-    except BaseException:
-        if not fd_closed:
-            with contextlib.suppress(OSError):
-                os.close(fd)
-        if os.path.exists(tmp_path):
-            os.unlink(tmp_path)
-        raise
+    atomic_write_text(path, json.dumps({"next_seq": next_seq}))
 
 
 def derive_next_seq(data_path: Path) -> int:

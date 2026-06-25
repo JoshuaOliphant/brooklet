@@ -2,16 +2,20 @@
 # ABOUTME: Coordinates registry, consumer, and offset modules into a unified API
 
 import glob as glob_module
-import re
+import logging
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 from brooklet.contrib import otel
 from brooklet.core.consumer import Consumer
-from brooklet.core.envelope import serialize
-from brooklet.core.types import Mode
+from brooklet.core.envelope import SeqTracker, serialize
+from brooklet.core.types import Event, Mode
+from brooklet.storage import segments
 from brooklet.storage.locking import topic_lock
 from brooklet.storage.registry import Registry
 from brooklet.storage.sidecar import derive_next_seq, read_next_seq, write_next_seq
+
+logger = logging.getLogger("brooklet")
 
 
 class Stream:
@@ -52,31 +56,29 @@ class Stream:
         data-0000.jsonl to migrate it into the segment numbering scheme.
         Sets self._segment_cache[topic] = (active_path, cached_size, seg_num).
         """
-        segments = sorted(glob_module.glob(str(topic_dir / "data-*.jsonl")))
+        existing = sorted(glob_module.glob(segments.glob_pattern(topic_dir)))
         bare = topic_dir / "data.jsonl"
 
-        if not segments and bare.exists():
+        if not existing and bare.exists():
             # Legacy migration: rename data.jsonl → data-0000.jsonl.
             # New writes start in data-0001.jsonl so 0000 is the historical archive.
-            migrated = topic_dir / "data-0000.jsonl"
-            bare.rename(migrated)
-            # Don't add to segments — fall through to brand-new topic logic at 0001
+            bare.rename(topic_dir / segments.filename(0))
+            # Don't add to existing — fall through to brand-new topic logic at 0001
             seg_num = 1
-            active = topic_dir / f"data-{seg_num:04d}.jsonl"
+            active = topic_dir / segments.filename(seg_num)
             active.touch()
             self._segment_cache[topic] = (active, 0, seg_num)
             return
 
-        if segments:
+        if existing:
             # Parse segment number from the last (active) segment
-            m = re.search(r"data-(\d+)\.jsonl$", segments[-1])
-            seg_num = int(m.group(1)) if m else 0
-            active = Path(segments[-1])
+            seg_num = segments.parse_number(existing[-1]) or 0
+            active = Path(existing[-1])
             size = active.stat().st_size
         else:
             # Brand new topic: start at segment 0001
             seg_num = 1
-            active = topic_dir / f"data-{seg_num:04d}.jsonl"
+            active = topic_dir / segments.filename(seg_num)
             active.touch()
             size = 0
 
@@ -139,7 +141,7 @@ class Stream:
                 # Rotate to next segment if the active one exceeds the size threshold
                 if cached_size >= max_segment_bytes:
                     seg_num += 1
-                    active_path = topic_dir / f"data-{seg_num:04d}.jsonl"
+                    active_path = topic_dir / segments.filename(seg_num)
                     active_path.touch()
                     cached_size = 0
 
@@ -166,8 +168,7 @@ class Stream:
                 self._segment_cache[topic] = (active_path, cached_size, seg_num)
 
             # Auto-register with glob pattern in the unified namespace
-            glob_pattern = str(topic_dir / "data-*.jsonl")
-            self._registry.register_local(topic, glob_pattern, mode="glob")
+            self._registry.register_local(topic, segments.glob_pattern(topic_dir), mode="glob")
             otel.meter.create_counter(
                 "brooklet.events_produced", description="Total events produced"
             ).add(1, {"topic": topic})
@@ -196,6 +197,58 @@ class Stream:
             source=topic,
             follow=follow,
         )
+
+    def read(
+        self,
+        topic: str,
+        on_read_error: Callable[[str, OSError | UnicodeDecodeError], None] | None = None,
+    ) -> Iterator[Event]:
+        """Yield every event from a topic without advancing any consumer offset.
+
+        A read-only full scan: unlike consume(), it tracks no offset and can be
+        called repeatedly to re-read the same events from the start. Envelope
+        fields are injected the same way — a topic-monotonic _seq set at produce
+        time is preserved, while legacy/external lines without one get a
+        high-water-mark fallback (see SeqTracker).
+
+        Args:
+            topic: Registered topic name.
+            on_read_error: Optional callback invoked as ``(filepath, error)`` when
+                a backing file cannot be read or decoded (OSError or a
+                UnicodeDecodeError from non-UTF-8 content). Defaults to logging a
+                warning. The file is skipped either way, so one unreadable segment
+                never aborts the scan.
+
+        Yields:
+            Event dicts with envelope fields.
+
+        Raises:
+            KeyError: If the topic is not registered.
+        """
+        source = self._registry.get(topic)
+        if source["mode"] == "glob":
+            paths = sorted(glob_module.glob(source["path"]))
+        else:
+            paths = [source["path"]]
+
+        # One tracker spans every segment so fallback _seq stays monotonic across
+        # files — the same contract Consumer holds for a topic's whole read.
+        tracker = SeqTracker(source=topic)
+        for fp in paths:
+            try:
+                with open(fp) as f:
+                    for line in f:
+                        event = tracker.wrap(line)
+                        if event is not None:
+                            yield event
+            except (OSError, UnicodeDecodeError) as e:
+                # OSError: missing/unreadable file. UnicodeDecodeError: the file
+                # exists but holds non-UTF-8 bytes — surfaced lazily by the line
+                # iterator. Both skip the file rather than aborting the whole scan.
+                if on_read_error is not None:
+                    on_read_error(fp, e)
+                else:
+                    logger.warning("Cannot read %s (topic=%s): %s", fp, topic, e)
 
     def topics(self) -> list[str]:
         """Return names of all registered topics."""
