@@ -30,3 +30,14 @@ def test_all_test_py_files_have_aboutme():
         assert len(lines) >= 2 and lines[1].startswith("# ABOUTME:"), (
             f"{path}: line 2 must start with '# ABOUTME:'"
         )
+
+
+def test_topic_tee_module_has_docstring():
+    """topic_tee must expose a module docstring describing the passthrough sink."""
+    from brooklet.contrib import topic_tee
+
+    doc = topic_tee.__doc__
+    assert doc is not None, "topic_tee is missing a module-level docstring"
+    lowered = doc.lower()
+    assert "passthrough" in lowered, "module docstring should describe the passthrough behavior"
+    assert "topic" in lowered, "module docstring should mention producing to a topic"

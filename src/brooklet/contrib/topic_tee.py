@@ -1,6 +1,16 @@
 # ABOUTME: Shared "tee" helper for contrib scan commands that mirror stats to a topic
 # ABOUTME: Produces each item to a brooklet topic as a passthrough, warning on failure
 
+"""Passthrough sink for contrib scan commands' ``--output`` mode.
+
+``tee_to_topic`` is a passthrough generator: it yields each source item
+unchanged while producing the item's ``to_dict()`` to a brooklet topic as a
+side effect. This lets scan commands keep streaming stats to their renderer
+while mirroring the same records into a topic. Produce failures are reported as
+warnings on stderr rather than raised, so a single bad record can't abort a
+long-running live scan.
+"""
+
 from collections.abc import Callable, Iterable, Iterator
 from typing import Any
 
