@@ -3,7 +3,7 @@
 
 import pytest
 
-from brooklet.storage.offsets import load, save
+from brooklet.storage.offsets import _offset_path, load, save
 
 
 class TestOffsets:
@@ -88,3 +88,67 @@ class TestOffsets:
 
         with pytest.raises(ValueError, match="path traversal"):
             load(offsets_dir, group="../etc", topic="t")
+
+
+class TestOffsetPathInjectivity:
+    """Distinct valid (group, topic) identities must map to distinct offset files.
+
+    The old scheme built ``f"{group}-{topic.replace('/', '--')}.json"``, which is
+    not injective: the group/topic boundary is ambiguous ('a'+'b-c' collides with
+    'a-b'+'c'), and the '/'->'--' rewrite collides topic 'a/b' with literal 'a--b'.
+    Both classes are reachable because names may contain '-' and '/'.
+    """
+
+    def test_hyphen_boundary_pairs_are_independent(self, offsets_dir):
+        """(group='a', topic='b-c') and (group='a-b', topic='c') stay independent."""
+        save(offsets_dir, group="a", topic="b-c", offset=11)
+        save(offsets_dir, group="a-b", topic="c", offset=22)
+
+        assert load(offsets_dir, group="a", topic="b-c") == 11
+        assert load(offsets_dir, group="a-b", topic="c") == 22
+
+    def test_slash_topic_vs_literal_dashes_are_independent(self, offsets_dir):
+        """Topic 'a/b' and literal topic 'a--b' stay independent under one group."""
+        save(offsets_dir, group="g", topic="a/b", offset=33)
+        save(offsets_dir, group="g", topic="a--b", offset=44)
+
+        assert load(offsets_dir, group="g", topic="a/b") == 33
+        assert load(offsets_dir, group="g", topic="a--b") == 44
+
+    def test_colliding_identities_map_to_distinct_paths(self, offsets_dir):
+        """The documented collision pairs resolve to distinct filenames."""
+        assert _offset_path(offsets_dir, "a", "b-c") != _offset_path(
+            offsets_dir, "a-b", "c"
+        )
+        assert _offset_path(offsets_dir, "g", "a/b") != _offset_path(
+            offsets_dir, "g", "a--b"
+        )
+
+    def test_offset_path_stays_within_offsets_dir(self, offsets_dir):
+        """Even path-style topics resolve to a flat file directly in offsets_dir."""
+        cases = [
+            ("g", "a/b/c"),
+            ("scout/x", "stats/y"),
+            ("g", "."),
+            ("a-b", "c-d"),
+        ]
+        for group, topic in cases:
+            resolved = _offset_path(offsets_dir, group, topic).resolve()
+            assert resolved.parent == offsets_dir.resolve()
+
+    def test_load_falls_back_to_legacy_scheme_file(self, offsets_dir):
+        """An offset written under the old scheme is still readable after upgrade."""
+        import json
+
+        # Old scheme filename for (group='g', topic='topic-a') was "g-topic-a.json".
+        legacy = offsets_dir / "g-topic-a.json"
+        legacy.write_text(json.dumps({"offset": 55}))
+
+        assert load(offsets_dir, group="g", topic="topic-a") == 55
+
+    def test_save_writes_new_scheme_not_legacy(self, offsets_dir):
+        """New writes use the injective encoding, not the legacy raw-hyphen name."""
+        save(offsets_dir, group="g", topic="topic-a", offset=5)
+
+        assert not (offsets_dir / "g-topic-a.json").exists()
+        assert load(offsets_dir, group="g", topic="topic-a") == 5

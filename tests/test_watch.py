@@ -256,7 +256,8 @@ def test_watch_saves_offset_on_sigterm(tmp_path):
         proc.wait()
         raise
 
-    offset_file = tmp_path / ".brooklet" / "offsets" / "sigterm-test-sigterm.json"
+    # Group "sigterm-test" encodes its '-' as '%2D' under the injective scheme.
+    offset_file = tmp_path / ".brooklet" / "offsets" / "sigterm%2Dtest-sigterm.json"
     assert offset_file.exists(), (
         f"offset file not saved on SIGTERM at {offset_file} — resumability is broken"
     )
