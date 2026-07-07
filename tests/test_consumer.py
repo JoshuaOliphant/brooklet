@@ -659,6 +659,59 @@ class TestConsumerOffsetSaveDurability:
         assert "brooklet" in captured.err
         assert "glob-save-fail" in captured.err
 
+    def test_glob_catch_up_concurrent_close_persists_live_offset(self, tmp_path, offsets_dir):
+        """close() from another thread during glob catch-up must persist the
+        progress already made, not the stale pre-catch-up offset (brooklet-11t).
+
+        Reproduces the regression: a background thread iterates a glob consumer;
+        after data-0001 is fully read and iteration has advanced into data-0002,
+        the main thread calls close(). The persisted offset must reflect that
+        data-0001 was consumed, otherwise a restart redelivers its events.
+        """
+        import threading
+
+        from brooklet.core.types import GlobOffset
+        from brooklet.storage.offsets import load
+
+        dir_ = tmp_path / "sessions"
+        dir_.mkdir()
+        for num, event in [(1, {"type": "a1"}), (2, {"type": "b1"}), (3, {"type": "c1"})]:
+            with open(dir_ / f"data-{num:04d}.jsonl", "w") as f:
+                f.write(json.dumps(event) + "\n")
+
+        consumer = Consumer(
+            path=str(dir_ / "data-*.jsonl"),
+            mode="glob",
+            group="test",
+            topic="glob-live-close",
+            offsets_dir=offsets_dir,
+        )
+
+        collected = []
+        past_first_file = threading.Event()
+        proceed = threading.Event()
+
+        def consume():
+            for i, event in enumerate(consumer):
+                collected.append(event)
+                if i == 1:
+                    # data-0001 fully read, suspended mid-catch-up in data-0002.
+                    past_first_file.set()
+                    proceed.wait(timeout=5.0)
+
+        t = threading.Thread(target=consume, daemon=True)
+        t.start()
+        assert past_first_file.wait(timeout=5.0)
+
+        consumer.close()
+        persisted = GlobOffset.decode(load(offsets_dir, "test", "glob-live-close"))
+
+        proceed.set()
+        t.join(timeout=5.0)
+
+        # Progress past data-0001 (segment 1) must be persisted — not (0, 0).
+        assert persisted.segment_number >= 2
+
 
 class TestConsumerSegmentSearch:
     """Tests for segment-number-based binary search in glob catch-up."""

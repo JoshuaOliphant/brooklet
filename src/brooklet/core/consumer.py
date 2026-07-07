@@ -360,6 +360,11 @@ class Consumer:
         # Set for the duration of single-file iteration so close() can snapshot
         # the reader's live file position from another thread; None otherwise.
         self._single_reader: _SingleFileReader | None = None
+        # Set for the duration of glob catch-up so close() can read the live
+        # GlobOffset reached so far from another thread; None outside catch-up
+        # (before it starts, and during glob-follow tailing where self._offset
+        # is already current). Mirrors self._single_reader.
+        self._glob_catch_up: _GlobCatchUp | None = None
         self._observer = None
 
         self._offset: SingleFileOffset | GlobOffset = self._load_offset()
@@ -564,10 +569,14 @@ class Consumer:
             read_lines=self._read_lines,
             file_positions=self._file_positions,
         )
+        # Expose the live unit so a concurrent close() reads the offset reached
+        # so far instead of the stale pre-catch-up self._offset.
+        self._glob_catch_up = catch_up
         try:
             yield from catch_up.events(files)
         finally:
             self._offset = catch_up.offset
+            self._glob_catch_up = None
 
     def _iterate_glob(self):
         """Read events across multiple files matched by glob pattern."""
@@ -693,11 +702,16 @@ class Consumer:
             if handle is not None and not handle.closed:
                 self._offset = SingleFileOffset(byte_offset=handle.tell())
                 self._save_offset()
-            elif isinstance(self._offset, GlobOffset) and self._offset.encode() > 0:
-                # Glob-mode consumers track progress via self._offset rather than
-                # _file_handle (which is local to the sub-generators). Save any
-                # progress accumulated so far so restarts resume correctly.
-                self._save_offset()
+            elif isinstance(self._offset, GlobOffset):
+                # Read the live GlobOffset: during catch-up it lives on the
+                # active _GlobCatchUp unit (self._offset is still the stale
+                # pre-catch-up value until _catch_up_glob's finally syncs it
+                # back); outside catch-up (before it starts, or during
+                # glob-follow tailing) self._offset is already current.
+                live = self._glob_catch_up.offset if self._glob_catch_up else self._offset
+                if live.encode() > 0:
+                    self._offset = live
+                    self._save_offset()
         finally:
             if self._observer is not None:
                 self._stop_observer(self._observer)
