@@ -1,0 +1,34 @@
+{
+  "feature": "architecture-debt-refactor",
+  "request": "Refactor brooklet's core/consumer.py Consumer god-object into per-mode strategy classes (single-file batch, single-file follow, glob batch, glob+follow) sharing a common offset-persistence mixin, so interrupt-safe offset saving isn't reimplemented per mode. Extract a shared contrib adapter framework that claude_analytics.py, pytest_analytics.py, and otel_consumer.py build on instead of duplicating the 3-layer (parsing -> consumer integration -> CLI plugin) pattern by convention only. Have claude_analytics.scan_sessions reuse Consumer's existing glob+follow mode instead of hand-rolling its own mtime-polling follow loop. Reduce complexity in contrib/otel_consumer.py's parsing functions.",
+  "state": "INIT",
+  "cycle": 1,
+  "driver": "auto",
+  "iteration": 1,
+  "budgets": {
+    "max_iterations": 50,
+    "max_attempts_per_task": 3,
+    "max_wait_ticks": 200
+  },
+  "in_flight": [],
+  "increments": [],
+  "wait_ticks": 0,
+  "attempts": {},
+  "review": {
+    "reviewers": [
+      "code-review"
+    ],
+    "mode": "block"
+  },
+  "last_progress_iteration": 0,
+  "history": [
+    {
+      "at": "2026-07-07T14:23:04+00:00",
+      "to": "INIT",
+      "reason": "initialized",
+      "cycle": 1
+    }
+  ],
+  "started": "2026-07-07T14:23:04+00:00",
+  "updated": "2026-07-07T14:23:08+00:00"
+}
