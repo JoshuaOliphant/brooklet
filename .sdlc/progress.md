@@ -4,3 +4,4 @@ Request: Refactor brooklet's core/consumer.py Consumer god-object into per-mode 
 
 - 2026-07-07T14:23:04+00:00 loop initialized (driver=auto)
 - 2026-07-07T14:23:51+00:00 → SPEC: feature branch feature/architecture-debt-refactor created; gh/bd/uv tooling confirmed; no observability tasks needed (library/CLI refactor, no new long-running surface)
+- 2026-07-07T14:28:53+00:00 → PLAN: spec written at specs/architecture-debt-refactor-spec.md with 6 ACs covering Consumer split, contrib scaffolding, scan_sessions reuse, otel_consumer complexity, and coverage/lint bar
