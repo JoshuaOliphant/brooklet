@@ -895,3 +895,99 @@ class TestTopicMonotonicSeq:
         assert seqs[0] == 100
         assert seqs[1] > 100
         assert seqs[0] < seqs[1]
+
+
+class TestGlobCatchUpUnit:
+    """Directly exercises the extracted `_GlobCatchUp` state machine in isolation.
+
+    These pin the unit's public contract — `events()` iteration plus the
+    `offset` reached so far — independent of the `Consumer` that drives it.
+    """
+
+    def _segments(self, tmp_path, *batches):
+        """Write data-NNNN.jsonl segment files, returning their sorted paths."""
+        paths = []
+        for n, events in enumerate(batches, start=1):
+            path = tmp_path / f"data-{n:04d}.jsonl"
+            with open(path, "w") as f:
+                for e in events:
+                    f.write(json.dumps(e) + "\n")
+            paths.append(str(path))
+        return sorted(paths)
+
+    def _catch_up(self, tmp_path, **kwargs):
+        """Build a `_GlobCatchUp` borrowing a real Consumer's `_read_lines`."""
+        from brooklet.core.consumer import Consumer, _GlobCatchUp
+        from brooklet.core.types import GlobOffset
+
+        consumer = Consumer(
+            path=str(tmp_path / "data-*.jsonl"),
+            mode="glob",
+            group="g",
+            topic="t",
+            offsets_dir=str(tmp_path / "offsets"),
+            **{k: v for k, v in kwargs.items() if k == "follow"},
+        )
+        file_positions = kwargs.get("file_positions", {})
+        return _GlobCatchUp(
+            offset=kwargs.get("offset", GlobOffset(0, 0)),
+            follow=kwargs.get("follow", False),
+            topic="t",
+            group="g",
+            read_lines=consumer._read_lines,
+            file_positions=file_positions,
+        )
+
+    def test_full_read_advances_offset_to_last_segment(self, tmp_path):
+        """Reading all segments leaves the offset at the last segment, byte>0."""
+        files = self._segments(tmp_path, [{"x": 1}, {"x": 2}], [{"y": 1}])
+        catch_up = self._catch_up(tmp_path)
+
+        events = list(catch_up.events(files))
+
+        assert len(events) == 3
+        assert catch_up.offset.segment_number == 2
+        assert catch_up.offset.byte_offset > 0
+
+    def test_offset_captures_mid_file_position_on_interruption(self, tmp_path):
+        """Interrupting mid-file records the in-progress byte offset, not 0."""
+        files = self._segments(tmp_path, [{"x": 1}, {"x": 2}, {"x": 3}])
+        catch_up = self._catch_up(tmp_path)
+
+        collected = []
+        gen = catch_up.events(files)
+        for event in gen:
+            collected.append(event)
+            if len(collected) == 1:
+                gen.close()  # GeneratorExit mid-file, like a SIGTERM teardown
+                break
+
+        assert catch_up.offset.segment_number == 1
+        assert catch_up.offset.byte_offset > 0
+
+    def test_no_files_resets_non_zero_offset(self, tmp_path):
+        """Zero matches with a stale non-zero offset resets to (0, 0)."""
+        from brooklet.core.types import GlobOffset
+
+        catch_up = self._catch_up(tmp_path, offset=GlobOffset(3, 42))
+
+        assert list(catch_up.events([])) == []
+        assert catch_up.offset == GlobOffset(0, 0)
+
+    def test_follow_seeds_file_positions_for_skipped_and_read(self, tmp_path):
+        """Follow mode records end positions for both skipped and read files."""
+        from brooklet.core.types import GlobOffset
+
+        files = self._segments(tmp_path, [{"x": 1}], [{"y": 1}])
+        positions: dict[str, int] = {}
+        catch_up = self._catch_up(
+            tmp_path,
+            follow=True,
+            offset=GlobOffset(2, 0),  # skip segment 1, read segment 2
+            file_positions=positions,
+        )
+
+        list(catch_up.events(files))
+
+        assert positions[files[0]] > 0  # skipped file's size recorded
+        assert positions[files[1]] > 0  # read file's end position recorded

@@ -41,6 +41,190 @@ def _find_start_index(segment_numbers: list[int], target_segment: int) -> int:
     return bisect.bisect_left(segment_numbers, target_segment)
 
 
+class _GlobCatchUp:
+    """Reads all unread events across glob-matched files, tracking a GlobOffset.
+
+    Owns its own coordination state — the active file handle and the running
+    GlobOffset — so the mid-file position can be captured internally when the
+    generator is torn down mid-iteration (KeyboardInterrupt/GeneratorExit from
+    a supervisor). Callers read the offset reached so far via `.offset` after
+    (or during) iteration, instead of the state machine reaching back into a
+    Consumer's mutable attributes.
+
+    For files following the data-NNNN.jsonl naming convention, uses segment
+    numbers and binary search to find the starting position; this correctly
+    handles gaps from segment deletion/compaction. For other glob sources,
+    falls back to positional indexing.
+
+    `file_positions` is the shared follow-mode buffer owned by the calling
+    Consumer: during follow mode this unit seeds it with each file's end
+    position so the Consumer's subsequent tailing loop can resume from there.
+    """
+
+    def __init__(
+        self,
+        *,
+        offset: GlobOffset,
+        follow: bool,
+        topic: str,
+        group: str,
+        read_lines,
+        file_positions: dict[str, int],
+    ) -> None:
+        self._offset = offset
+        self._follow = follow
+        self._topic = topic
+        self._group = group
+        self._read_lines = read_lines
+        self._file_positions = file_positions
+        # Active file handle during a read, so the per-file finally can
+        # capture mid-file progress if iteration is interrupted.
+        self._active_file = None
+
+    @property
+    def offset(self) -> GlobOffset:
+        """The GlobOffset reached so far (advanced live during iteration)."""
+        return self._offset
+
+    def events(self, files: list[str]) -> Iterator[Event]:
+        """Yield all unread events across `files`, advancing `self._offset`."""
+        if not files:
+            self._handle_no_files()
+            return
+
+        segment_numbers, start_idx, start_byte_offset = self._plan(files)
+
+        for i, filepath in enumerate(files):
+            if i < start_idx:
+                self._record_skipped(filepath)
+                continue
+            seek = start_byte_offset if i == start_idx else 0
+            yield from self._read_file(files, segment_numbers, i, filepath, seek)
+
+    def _handle_no_files(self) -> None:
+        """Reset a non-zero offset (with a logged error) when nothing matched."""
+        if self._offset.segment_number != 0 or self._offset.byte_offset != 0:
+            logger.error(
+                "Glob matched no files but offset is non-zero "
+                "(segment_number=%d, byte_offset=%d). "
+                "Resetting offset (topic=%s, group=%s).",
+                self._offset.segment_number,
+                self._offset.byte_offset,
+                self._topic,
+                self._group,
+            )
+            self._offset = GlobOffset(segment_number=0, byte_offset=0)
+
+    def _plan(self, files: list[str]) -> tuple[list[int], int, int]:
+        """Resolve (segment_numbers, start_idx, start_byte_offset) for `files`."""
+        parsed = [segments.parse_number(f) for f in files]
+        if all(sn is not None for sn in parsed):
+            # Segment-number-based lookup via binary search — stable across deletion
+            segment_numbers: list[int] = [sn for sn in parsed if sn is not None]
+            start_idx = _find_start_index(segment_numbers, self._offset.segment_number)
+            # Only apply saved byte_offset if the target segment is exactly the saved one
+            if start_idx < len(files) and segment_numbers[start_idx] == self._offset.segment_number:
+                start_byte_offset = self._offset.byte_offset
+            else:
+                start_byte_offset = 0
+            return segment_numbers, start_idx, start_byte_offset
+        return self._plan_positional(files)
+
+    def _plan_positional(self, files: list[str]) -> tuple[list[int], int, int]:
+        """Positional fallback for external glob sources not using segment names."""
+        segment_numbers = list(range(len(files)))
+        start_idx = self._offset.segment_number
+        start_byte_offset = self._offset.byte_offset
+
+        if start_idx >= len(files):
+            logger.error(
+                "Saved segment_number %d is out of bounds (only %d files matched). "
+                "Files may have been added or removed between sessions. "
+                "Resetting to start of all files (topic=%s, group=%s).",
+                start_idx,
+                len(files),
+                self._topic,
+                self._group,
+            )
+            start_idx = 0
+            start_byte_offset = 0
+            self._offset = GlobOffset(segment_number=0, byte_offset=0)
+        return segment_numbers, start_idx, start_byte_offset
+
+    def _record_skipped(self, filepath: str) -> None:
+        """Record a skipped file's size in the follow-mode position buffer."""
+        if self._follow:
+            try:
+                self._file_positions[filepath] = Path(filepath).stat().st_size
+            except OSError as e:
+                logger.warning(
+                    "Cannot stat skipped file %s (topic=%s, group=%s): %s",
+                    filepath,
+                    self._topic,
+                    self._group,
+                    e,
+                )
+
+    def _advance(
+        self, files: list[str], segment_numbers: list[int], i: int, end_pos: int = 0
+    ) -> GlobOffset:
+        """Offset positioned after file `i`: at end_pos if last, else next segment start."""
+        if i == len(files) - 1:
+            return GlobOffset(segment_number=segment_numbers[i], byte_offset=end_pos)
+        return GlobOffset(segment_number=segment_numbers[i + 1], byte_offset=0)
+
+    def _read_file(
+        self,
+        files: list[str],
+        segment_numbers: list[int],
+        i: int,
+        filepath: str,
+        seek: int,
+    ) -> Iterator[Event]:
+        """Yield events from one file, advancing the offset past it when done."""
+        try:
+            f = open(filepath)  # noqa: SIM115
+        except OSError as e:
+            logger.warning(
+                "Cannot open file %s during catch-up (topic=%s, group=%s): %s",
+                filepath,
+                self._topic,
+                self._group,
+                e,
+            )
+            self._offset = self._advance(files, segment_numbers, i)
+            return
+
+        try:
+            f.seek(seek)
+            # Track active file so the finally can capture mid-file progress
+            # if iteration is interrupted (e.g. KeyboardInterrupt from a
+            # supervisor like Claude Code's Monitor).
+            self._active_file = f
+
+            yield from self._read_lines(f)
+
+            end_pos = f.tell()
+            if self._follow:
+                self._file_positions[filepath] = end_pos
+            self._offset = self._advance(files, segment_numbers, i, end_pos)
+            # Normal path: release the tracker so the finally leaves the
+            # advanced offset in place.
+            self._active_file = None
+        finally:
+            # On exception paths (GeneratorExit / user exception raised through
+            # the yield), capture the mid-file position so callers persist it.
+            # On the normal path the tracker was already cleared, so the
+            # advanced offset stands.
+            if self._active_file is f:
+                with contextlib.suppress(OSError, ValueError):
+                    self._offset = GlobOffset(
+                        segment_number=segment_numbers[i], byte_offset=f.tell()
+                    )
+                self._active_file = None
+            f.close()
+
+
 class Consumer:
     """Iterator over JSONL events with offset tracking.
 
@@ -76,12 +260,9 @@ class Consumer:
         self._observer = None
 
         self._offset: SingleFileOffset | GlobOffset = self._load_offset()
-        # Per-file byte positions used during glob+follow tailing
+        # Shared follow-mode buffer: _GlobCatchUp seeds each file's end
+        # position here during catch-up so the tailing loop can resume from it.
         self._file_positions: dict[str, int] = {}
-        # Active file handle + index during glob catch-up, so the finally
-        # block can capture mid-file progress on exception paths.
-        self._glob_active_file = None
-        self._glob_active_index: int = 0
 
     def _load_offset(self) -> SingleFileOffset | GlobOffset:
         """Load offset from storage, returning the appropriate typed offset."""
@@ -248,138 +429,27 @@ class Consumer:
     def _catch_up_glob(self, files: list[str]) -> Iterator[Event]:
         """Read all unread events from glob-matched files, updating offset.
 
-        Shared between batch glob and glob+follow modes. During follow mode,
-        also populates _file_positions for subsequent tailing.
-
-        For files following the data-NNNN.jsonl naming convention, uses
-        segment numbers and binary search to find the starting position.
-        This correctly handles gaps from segment deletion/compaction.
-        For other glob sources, falls back to positional indexing.
+        Delegates to `_GlobCatchUp`, which owns the catch-up coordination
+        state internally. Shared between batch glob and glob+follow modes;
+        during follow mode `_GlobCatchUp` seeds `_file_positions` for the
+        subsequent tailing loop. The offset reached — including any mid-file
+        position captured on interruption — is synced back into `self._offset`
+        so the callers' `finally` blocks persist it.
         """
         assert isinstance(self._offset, GlobOffset)
 
-        if not files:
-            if self._offset.segment_number != 0 or self._offset.byte_offset != 0:
-                logger.error(
-                    "Glob matched no files but offset is non-zero "
-                    "(segment_number=%d, byte_offset=%d). "
-                    "Resetting offset (topic=%s, group=%s).",
-                    self._offset.segment_number,
-                    self._offset.byte_offset,
-                    self._topic,
-                    self._group,
-                )
-                self._offset = GlobOffset(segment_number=0, byte_offset=0)
-            return
-
-        # Determine whether all files follow the data-NNNN.jsonl convention
-        parsed = [segments.parse_number(f) for f in files]
-        use_segments = all(sn is not None for sn in parsed)
-
-        if use_segments:
-            # Segment-number-based lookup via binary search — stable across deletion
-            segment_numbers: list[int] = [sn for sn in parsed if sn is not None]
-            start_idx = _find_start_index(segment_numbers, self._offset.segment_number)
-            # Only apply saved byte_offset if the target segment is exactly the saved one
-            if start_idx < len(files) and segment_numbers[start_idx] == self._offset.segment_number:
-                start_byte_offset = self._offset.byte_offset
-            else:
-                start_byte_offset = 0
-        else:
-            # Positional fallback for external glob sources
-            segment_numbers = list(range(len(files)))
-            start_idx = self._offset.segment_number
-            start_byte_offset = self._offset.byte_offset
-
-            if start_idx >= len(files):
-                logger.error(
-                    "Saved segment_number %d is out of bounds (only %d files matched). "
-                    "Files may have been added or removed between sessions. "
-                    "Resetting to start of all files (topic=%s, group=%s).",
-                    start_idx,
-                    len(files),
-                    self._topic,
-                    self._group,
-                )
-                start_idx = 0
-                start_byte_offset = 0
-                self._offset = GlobOffset(segment_number=0, byte_offset=0)
-
-        for i, filepath in enumerate(files):
-            if i < start_idx:
-                # Still record position for follow mode
-                if self._follow:
-                    try:
-                        self._file_positions[filepath] = Path(filepath).stat().st_size
-                    except OSError as e:
-                        logger.warning(
-                            "Cannot stat skipped file %s (topic=%s, group=%s): %s",
-                            filepath,
-                            self._topic,
-                            self._group,
-                            e,
-                        )
-                continue
-
-            try:
-                f = open(filepath)  # noqa: SIM115
-            except OSError as e:
-                logger.warning(
-                    "Cannot open file %s during catch-up (topic=%s, group=%s): %s",
-                    filepath,
-                    self._topic,
-                    self._group,
-                    e,
-                )
-                # Advance offset past this file
-                seg_num = segment_numbers[i]
-                if i == len(files) - 1:
-                    self._offset = GlobOffset(segment_number=seg_num, byte_offset=0)
-                else:
-                    next_seg = segment_numbers[i + 1]
-                    self._offset = GlobOffset(segment_number=next_seg, byte_offset=0)
-                continue
-
-            try:
-                if i == start_idx:
-                    f.seek(start_byte_offset)
-
-                # Track active file so the batch finally block can capture
-                # mid-file progress if iteration is interrupted (e.g.
-                # KeyboardInterrupt from a supervisor like Claude Code's
-                # Monitor).
-                self._glob_active_file = f
-                self._glob_active_index = i
-
-                yield from self._read_lines(f)
-
-                end_pos = f.tell()
-                if self._follow:
-                    self._file_positions[filepath] = end_pos
-
-                # After reading this file, update offset to next file
-                seg_num = segment_numbers[i]
-                if i == len(files) - 1:
-                    self._offset = GlobOffset(segment_number=seg_num, byte_offset=end_pos)
-                else:
-                    next_seg = segment_numbers[i + 1]
-                    self._offset = GlobOffset(segment_number=next_seg, byte_offset=0)
-                # Normal path: release the active-file tracker so the
-                # finally below leaves self._offset at the advanced value.
-                self._glob_active_file = None
-            finally:
-                # On exception paths (GeneratorExit / user exception raised
-                # through the yield), capture the mid-file position into
-                # self._offset so the outer _iterate_glob finally can persist
-                # it. On the normal path the tracker was already cleared, so
-                # we leave self._offset at its advanced value.
-                if self._glob_active_file is f:
-                    with contextlib.suppress(OSError, ValueError):
-                        self._offset = GlobOffset(
-                            segment_number=segment_numbers[i], byte_offset=f.tell()
-                        )
-                    self._glob_active_file = None
-                f.close()
+        catch_up = _GlobCatchUp(
+            offset=self._offset,
+            follow=self._follow,
+            topic=self._topic,
+            group=self._group,
+            read_lines=self._read_lines,
+            file_positions=self._file_positions,
+        )
+        try:
+            yield from catch_up.events(files)
+        finally:
+            self._offset = catch_up.offset
 
     def _iterate_glob(self):
         """Read events across multiple files matched by glob pattern."""
