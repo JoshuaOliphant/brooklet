@@ -14,7 +14,7 @@ Source layout uses three subpackages so directory names communicate intent (the 
 - `core/envelope.py` — Metadata injection (_ts, _seq, _src): `wrap()` on read, `serialize()` on write, `SeqTracker` for high-water-mark fallback _seq across a topic's read
 - `core/types.py` — Shared type definitions (Mode, Event, offset dataclasses, SourceDef)
 - `core/stream.py` — Orchestrator: `register()`, `produce()`, `consume()`, `read()`, `topics()`. Segment rotation + sidecar + flock
-- `core/consumer.py` — Batch and follow-mode iterators over JSONL files
+- `core/consumer.py` — Batch and follow-mode iterators over JSONL files. `Consumer` is a thin mode-dispatcher over two internal strategy units: `_GlobCatchUp` (glob-mode catch-up, owns its own active-file/offset coordination state) and `_SingleFileReader` (single-file batch + follow/tailing, owns the open handle and running offset). Both expose an `.offset`/`.events()` shape; `Consumer._persist_offset()` is the single shared "save, report-don't-raise on OSError, save-before-assign" contract used by both teardown paths.
 
 #### `storage/` — persistence layer (everything under `.brooklet/`)
 - `storage/offsets.py` — Byte offset persistence per consumer group
@@ -35,6 +35,7 @@ Source layout uses three subpackages so directory names communicate intent (the 
 - `contrib/pytest_analytics.py` — pytest-reportlog test run analytics (`brooklet pytest scan`)
 - `contrib/otel.py` — Optional OpenTelemetry instrumentation (tracing + metrics); no-op without SDK
 - `contrib/topic_tee.py` — `tee_to_topic()`: shared passthrough sink for scan commands' `--output` mode (produce each stat to a topic, warn-not-raise on failure)
+- `contrib/cli_options.py` — `StreamDirOption`: shared `--stream-dir` Typer option definition, used by every adapter's CLI command instead of each retyping the same `Annotated[Path | None, ...]` shape
 
 ### Key Decisions
 - `produce()` is in core — consumers that transform and re-emit need a clean write path (DEC-011)

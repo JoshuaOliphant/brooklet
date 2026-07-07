@@ -11,7 +11,10 @@ Contrib adapters follow the **3-layer pattern**:
    For `--output` mode (mirror parsed stats into a topic), use the shared
    `contrib/topic_tee.py:tee_to_topic()` passthrough sink rather than hand-rolling
    a produce-and-warn generator.
-3. **CLI** — Provide a `scan` subcommand via typer
+3. **CLI** — Provide a `scan` subcommand via typer. Use the shared
+   `contrib/cli_options.py:StreamDirOption` for the `--stream-dir` option rather
+   than retyping the `Annotated[Path | None, typer.Option(...)]` shape — every
+   adapter needs the same option, so there is exactly one definition of it.
 
 See existing adapters for reference:
 - `contrib/claude_analytics.py` — Claude Code session analytics (`brooklet scout scan`)
