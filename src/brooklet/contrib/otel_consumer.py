@@ -15,7 +15,7 @@ import typer
 
 import brooklet
 from brooklet.cli.plugins import hookimpl
-from brooklet.contrib.cli_options import StreamDirOption
+from brooklet.contrib.cli_options import StreamDirOptionFollowOnly
 
 _logger = logging.getLogger("brooklet.contrib.otel")
 
@@ -196,7 +196,8 @@ def _scan(
         kind_dir = harness_path / kind
         if not kind_dir.exists():
             _logger.warning(
-                f"otel_consumer: {kind} directory not found", extra={"path": str(kind_dir)}
+                f"otel_consumer: {kind} directory not found",
+                extra={"path": str(kind_dir), "kind": kind},
             )
             return
         for filepath in sorted(glob_module.glob(kind_glob)):
@@ -313,7 +314,7 @@ class OtelPlugin:
             ],
             follow: Annotated[bool, typer.Option(help="Tail for new spans")] = False,
             group: Annotated[str, typer.Option(help="Consumer group name")] = "otel",
-            stream_dir: StreamDirOption = None,
+            stream_dir: StreamDirOptionFollowOnly = None,
         ) -> None:
             """Show OTLP trace spans from Vector JSONL output."""
             for span in scan_traces(
@@ -328,7 +329,7 @@ class OtelPlugin:
             ],
             follow: Annotated[bool, typer.Option(help="Tail for new metrics")] = False,
             group: Annotated[str, typer.Option(help="Consumer group name")] = "otel",
-            stream_dir: StreamDirOption = None,
+            stream_dir: StreamDirOptionFollowOnly = None,
         ) -> None:
             """Show OTLP metrics from Vector JSONL output."""
             for m in scan_metrics(
@@ -343,7 +344,7 @@ class OtelPlugin:
             ],
             follow: Annotated[bool, typer.Option(help="Tail for new log records")] = False,
             group: Annotated[str, typer.Option(help="Consumer group name")] = "otel",
-            stream_dir: StreamDirOption = None,
+            stream_dir: StreamDirOptionFollowOnly = None,
         ) -> None:
             """Show OTLP log records from Vector JSONL output."""
             for log in scan_logs(

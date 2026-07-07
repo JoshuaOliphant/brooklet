@@ -979,7 +979,7 @@ class TestGlobCatchUpUnit:
             group="g",
             topic="t",
             offsets_dir=str(tmp_path / "offsets"),
-            **{k: v for k, v in kwargs.items() if k == "follow"},
+            follow=kwargs.get("follow", False),
         )
         file_positions = kwargs.get("file_positions", {})
         return _GlobCatchUp(
