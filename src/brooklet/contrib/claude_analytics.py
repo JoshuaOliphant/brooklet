@@ -216,6 +216,98 @@ def _parse_file_events(filepath: str) -> list[dict]:
     return events
 
 
+def _safe_mtime(p: Path) -> float:
+    """Modification time for sorting, tolerant of files that vanish mid-scan."""
+    try:
+        return p.stat().st_mtime
+    except OSError as e:
+        print(f"Warning: cannot stat {p}: {e}", file=sys.stderr)
+        return 0.0
+
+
+def _resolve_active_files(session_dir: Path, window_minutes: int) -> list[Path]:
+    """Session files inside the --current time window, oldest-first by mtime.
+
+    With ``window_minutes == 0`` returns only the single most recent file
+    (backward-compat). Otherwise returns every file modified within the window.
+    Shared by the one-shot scan and each rescan of the follow loop.
+    """
+    jsonl_files = sorted(session_dir.glob("*.jsonl"), key=_safe_mtime)
+    if window_minutes == 0:
+        return jsonl_files[-1:]
+    cutoff = time.time() - (window_minutes * 60)
+    return [f for f in jsonl_files if _safe_mtime(f) > cutoff]
+
+
+def _follow_current(session_dir: Path, window_minutes: int) -> Iterator[SessionStats]:
+    """Poll-based follow for --current mode.
+
+    Re-scans for active files within the window and re-parses changed ones.
+    Detects new sessions that appear after the initial scan (new chats, resumed
+    sessions). Sessions that fall out of the window are yielded with
+    removed=True. The polling is deliberately time-driven, not event-driven:
+    the removal signal must be able to fire from pure elapsed wall-clock time
+    with no new file writes, which brooklet's event-driven glob+follow consumer
+    cannot provide.
+    """
+    file_sizes: dict[str, int] = {}
+    session_events: dict[str, list[dict]] = {}
+    known_session_ids: set[str] = set()
+
+    while True:
+        scan_files = _resolve_active_files(session_dir, window_minutes)
+        current_sids: set[str] = set()
+        changed = False
+
+        for target in scan_files:
+            sid = _session_id_from_path(str(target))
+            current_sids.add(sid)
+            try:
+                current_size = target.stat().st_size
+            except OSError:
+                continue
+            prev_size = file_sizes.get(str(target), 0)
+
+            if current_size != prev_size:
+                file_sizes[str(target)] = current_size
+                events = _parse_file_events(str(target))
+                if events:
+                    session_events[sid] = events
+                    yield aggregate_session(sid, events)
+                    changed = True
+
+        # Yield removal signals for sessions that left the window
+        removed_sids = known_session_ids - current_sids
+        for sid in removed_sids:
+            yield SessionStats(session_id=sid, removed=True)
+            session_events.pop(sid, None)
+            changed = True
+
+        known_session_ids = current_sids
+
+        if not changed:
+            time.sleep(2)
+
+
+def _scan_current(
+    session_dir: Path, follow: bool, window_minutes: int
+) -> Iterator[SessionStats]:
+    """Scan only the currently-active session files (--current mode)."""
+    active_files = _resolve_active_files(session_dir, window_minutes)
+    if not active_files:
+        print("No active session found", file=sys.stderr)
+        return
+
+    if follow:
+        yield from _follow_current(session_dir, window_minutes)
+    else:
+        for target in active_files:
+            session_id = _session_id_from_path(str(target))
+            events = _parse_file_events(str(target))
+            if events:
+                yield aggregate_session(session_id, events)
+
+
 def scan_sessions(
     path: str,
     follow: bool = False,
@@ -240,85 +332,7 @@ def scan_sessions(
         return
 
     if current:
-
-        def _safe_mtime(p: Path) -> float:
-            try:
-                return p.stat().st_mtime
-            except OSError as e:
-                print(f"Warning: cannot stat {p}: {e}", file=sys.stderr)
-                return 0.0
-
-        jsonl_files = sorted(session_dir.glob("*.jsonl"), key=_safe_mtime)
-        if not jsonl_files:
-            print("No active session found", file=sys.stderr)
-            return
-
-        if window_minutes == 0:
-            # Backward compat: single most recent file
-            active_files = [jsonl_files[-1]]
-        else:
-            cutoff = time.time() - (window_minutes * 60)
-            active_files = [f for f in jsonl_files if _safe_mtime(f) > cutoff]
-            active_files = sorted(active_files, key=_safe_mtime)
-            if not active_files:
-                print("No active session found", file=sys.stderr)
-                return
-
-        if follow:
-            # Poll-based follow: re-scan for new/modified files within the
-            # window and re-parse changed ones. Detects new sessions that
-            # appear after initial scan (new chats, resumed sessions).
-            # Sessions that fall out of the window are yielded with removed=True.
-            file_sizes: dict[str, int] = {}
-            session_events: dict[str, list[dict]] = {}
-            known_session_ids: set[str] = set()
-
-            while True:
-                # Re-scan for active files within the window
-                all_jsonl = sorted(session_dir.glob("*.jsonl"), key=_safe_mtime)
-                if window_minutes == 0:
-                    scan_files = [all_jsonl[-1]] if all_jsonl else []
-                else:
-                    cutoff = time.time() - (window_minutes * 60)
-                    scan_files = [f for f in all_jsonl if _safe_mtime(f) > cutoff]
-
-                current_sids: set[str] = set()
-                changed = False
-
-                for target in scan_files:
-                    sid = _session_id_from_path(str(target))
-                    current_sids.add(sid)
-                    try:
-                        current_size = target.stat().st_size
-                    except OSError:
-                        continue
-                    prev_size = file_sizes.get(str(target), 0)
-
-                    if current_size != prev_size:
-                        file_sizes[str(target)] = current_size
-                        events = _parse_file_events(str(target))
-                        if events:
-                            session_events[sid] = events
-                            yield aggregate_session(sid, events)
-                            changed = True
-
-                # Yield removal signals for sessions that left the window
-                removed_sids = known_session_ids - current_sids
-                for sid in removed_sids:
-                    yield SessionStats(session_id=sid, removed=True)
-                    session_events.pop(sid, None)
-                    changed = True
-
-                known_session_ids = current_sids
-
-                if not changed:
-                    time.sleep(2)
-        else:
-            for target in active_files:
-                session_id = _session_id_from_path(str(target))
-                events = _parse_file_events(str(target))
-                if events:
-                    yield aggregate_session(session_id, events)
+        yield from _scan_current(session_dir, follow, window_minutes)
         return
 
     # Glob mode: process all session files
