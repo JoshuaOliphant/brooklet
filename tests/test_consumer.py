@@ -991,3 +991,64 @@ class TestGlobCatchUpUnit:
 
         assert positions[files[0]] > 0  # skipped file's size recorded
         assert positions[files[1]] > 0  # read file's end position recorded
+
+
+class TestSingleFileReaderUnit:
+    """Directly exercises the extracted `_SingleFileReader` in isolation.
+
+    These pin the unit's public contract — `events()` iteration, the `offset`
+    reached so far, and the `file_handle` snapshot used by `Consumer.close()` —
+    independent of the `Consumer` that drives it, mirroring `TestGlobCatchUpUnit`.
+    """
+
+    def _reader(self, path, **kwargs):
+        """Build a `_SingleFileReader` borrowing a real Consumer's `_read_lines`."""
+        from brooklet.core.consumer import Consumer, _SingleFileReader
+        from brooklet.core.types import SingleFileOffset
+
+        consumer = Consumer(
+            path=str(path),
+            mode="single-file",
+            group="g",
+            topic="t",
+            offsets_dir=str(path.parent / "offsets"),
+        )
+        return _SingleFileReader(
+            path=path,
+            offset=kwargs.get("offset", SingleFileOffset(byte_offset=0)),
+            follow=False,
+            read_lines=consumer._read_lines,
+            observe=consumer._observe,
+            is_closed=lambda: True,
+        )
+
+    def test_full_read_advances_offset_to_eof(self, tmp_path):
+        """Reading the whole file leaves the offset at EOF (byte>0)."""
+        path = tmp_path / "data.jsonl"
+        path.write_text(json.dumps({"x": 1}) + "\n" + json.dumps({"x": 2}) + "\n")
+        reader = self._reader(path)
+
+        events = list(reader.events())
+
+        assert len(events) == 2
+        assert reader.offset.byte_offset > 0
+        assert reader.file_handle is None  # cleared after teardown
+
+    def test_offset_captures_mid_file_position_on_interruption(self, tmp_path):
+        """Interrupting mid-file records the in-progress byte offset, not 0."""
+        path = tmp_path / "data.jsonl"
+        path.write_text(
+            json.dumps({"x": 1}) + "\n" + json.dumps({"x": 2}) + "\n" + json.dumps({"x": 3}) + "\n"
+        )
+        reader = self._reader(path)
+
+        collected = []
+        gen = reader.events()
+        for event in gen:
+            collected.append(event)
+            if len(collected) == 1:
+                gen.close()  # GeneratorExit mid-file, like a SIGTERM teardown
+                break
+
+        assert reader.offset.byte_offset > 0
+        assert reader.file_handle is None

@@ -225,6 +225,107 @@ class _GlobCatchUp:
             f.close()
 
 
+class _SingleFileReader:
+    """Reads unread lines from one JSONL file, tracking a SingleFileOffset.
+
+    Owns the open file handle and the running SingleFileOffset so the byte
+    position reached is captured internally when the generator is torn down
+    mid-iteration (a KeyboardInterrupt/GeneratorExit raised through the yield by
+    a supervisor like Claude Code's Monitor). The calling Consumer reads the
+    position reached via `.offset` and persists it, mirroring how `_GlobCatchUp`
+    hands its offset back instead of the state machine reaching into a
+    Consumer's mutable attributes.
+
+    Batch mode reads to EOF and returns; follow mode tails the file via the
+    caller-supplied `observe` context manager, polling on every wakeup because
+    macOS FSEvents coalesces rapid writes. `file_handle` is exposed only so a
+    concurrent Consumer.close() can snapshot the live position from another
+    thread while iteration is suspended at a yield.
+    """
+
+    def __init__(
+        self,
+        *,
+        path: Path,
+        offset: SingleFileOffset,
+        follow: bool,
+        read_lines,
+        observe,
+        is_closed,
+    ) -> None:
+        self._path = path
+        self._offset = offset
+        self._follow = follow
+        self._read_lines = read_lines
+        self._observe = observe
+        self._is_closed = is_closed
+        self._file = None
+
+    @property
+    def offset(self) -> SingleFileOffset:
+        """The SingleFileOffset reached so far (byte position after teardown)."""
+        return self._offset
+
+    @property
+    def file_handle(self):
+        """The active file handle, or None outside a read.
+
+        Exposed so Consumer.close() can snapshot the live byte position while
+        iteration is suspended at a yield in another thread.
+        """
+        return self._file
+
+    def events(self) -> Iterator[Event]:
+        """Yield unread lines, capturing the final byte position on teardown."""
+        f = open(self._path)  # noqa: SIM115
+        self._file = f
+        try:
+            f.seek(self._offset.byte_offset)
+            if self._follow:
+                yield from self._tail(f)
+            else:
+                yield from self._read_lines(f)
+        finally:
+            # Capture the position reached — EOF on the normal path, the
+            # mid-file position on interruption — so the caller persists it.
+            # Follow-mode iterators exit via exception (KeyboardInterrupt from
+            # SIGTERM), never by returning, so this must run in finally or every
+            # non-normal termination would silently lose the offset.
+            if not f.closed:
+                self._offset = SingleFileOffset(byte_offset=f.tell())
+            self._file = None
+            f.close()
+
+    def _tail(self, f) -> Iterator[Event]:
+        """Tail the file for appended lines using a watchdog observer."""
+        import queue
+
+        from watchdog.events import FileSystemEventHandler
+
+        path = self._path
+        event_queue = queue.Queue()
+
+        class Handler(FileSystemEventHandler):
+            def on_modified(self, event):
+                if Path(event.src_path).resolve() == path.resolve():
+                    event_queue.put(True)
+
+        with self._observe(str(path.parent), Handler()):
+            # First, read any existing lines.
+            yield from self._read_lines(f)
+
+            # Then tail for new lines — poll on every iteration because macOS
+            # FSEvents coalesces rapid writes, so relying solely on watchdog
+            # events would miss intermediate lines.
+            while not self._is_closed():
+                with contextlib.suppress(queue.Empty):
+                    event_queue.get(timeout=0.5)
+
+                _drain_queue(event_queue)
+
+                yield from self._read_lines(f)
+
+
 class Consumer:
     """Iterator over JSONL events with offset tracking.
 
@@ -256,7 +357,9 @@ class Consumer:
         # brooklet-a2c.
         self._seq_tracker = SeqTracker(source=source)
         self._closed = False
-        self._file_handle = None
+        # Set for the duration of single-file iteration so close() can snapshot
+        # the reader's live file position from another thread; None otherwise.
+        self._single_reader: _SingleFileReader | None = None
         self._observer = None
 
         self._offset: SingleFileOffset | GlobOffset = self._load_offset()
@@ -281,6 +384,24 @@ class Consumer:
         """
         target = self._offset if offset is None else offset
         save(self._offsets_dir, self._group, self._topic, target.encode())
+
+    def _persist_offset(self, candidate: SingleFileOffset | GlobOffset) -> None:
+        """Persist `candidate` at teardown, reporting — not raising — on OSError.
+
+        The single home for how brooklet survives an offset-save failure when a
+        read winds down. Saves the candidate first and rebinds self._offset only
+        on success (save-before-assign), so a failed write leaves self._offset
+        aligned with the last value actually on disk rather than a phantom
+        position that was never persisted. Shared by single-file teardown (where
+        the candidate is the fresh f.tell() position the reader reached) and
+        glob-batch teardown (where the candidate is the offset _GlobCatchUp
+        already advanced into self._offset).
+        """
+        try:
+            self._save_offset(candidate)
+            self._offset = candidate
+        except OSError as e:
+            self._report_save_failure(e)
 
     def _report_save_failure(self, exc: BaseException) -> None:
         """Report an offset-save failure to both structured logs and stderr.
@@ -356,7 +477,12 @@ class Consumer:
             raise ValueError(f"Unknown consumer mode: {self._mode!r}")
 
     def _iterate_single_file(self):
-        """Read events from a single JSONL file."""
+        """Read events from a single JSONL file via a `_SingleFileReader`.
+
+        The reader owns the file handle and byte-offset tracking; this method
+        only guards the nonexistent-file case, exposes the reader to close() for
+        the duration of the read, and persists the position the reader reached.
+        """
         path = Path(self._path).expanduser()
         if not path.exists():
             warnings.warn(
@@ -366,37 +492,29 @@ class Consumer:
             )
             return
 
-        f = open(path)  # noqa: SIM115
-        self._file_handle = f
+        assert isinstance(self._offset, SingleFileOffset)
+        reader = _SingleFileReader(
+            path=path,
+            offset=self._offset,
+            follow=self._follow,
+            read_lines=self._read_lines,
+            observe=self._observe,
+            is_closed=lambda: self._closed,
+        )
+        self._single_reader = reader
         try:
-            assert isinstance(self._offset, SingleFileOffset)
-            f.seek(self._offset.byte_offset)
-
-            if self._follow:
-                yield from self._iterate_follow(f, path)
-            else:
-                yield from self._read_lines(f)
+            yield from reader.events()
         finally:
             # Must live in finally, not after the yield loop — follow-mode
             # iterators exit via exception (KeyboardInterrupt from SIGTERM,
-            # typically from a supervisor like Claude Code's Monitor), never
-            # by returning normally. Moving this save out of finally would
-            # silently lose offsets on every non-normal termination and
-            # break resume-across-restarts.
-            if not f.closed:
-                # Save-before-assign: compute the candidate locally, save
-                # it first, and only rebind self._offset on success. If the
-                # save raises, self._offset stays aligned with on-disk
-                # state so close() and any later inspection see consistent
-                # data.
-                candidate = SingleFileOffset(byte_offset=f.tell())
-                try:
-                    self._save_offset(candidate)
-                    self._offset = candidate
-                except OSError as e:
-                    self._report_save_failure(e)
-            self._file_handle = None
-            f.close()
+            # typically from a supervisor like Claude Code's Monitor), never by
+            # returning normally. Moving this save out of finally would silently
+            # lose offsets on every non-normal termination and break
+            # resume-across-restarts. _persist_offset applies the save-before-
+            # assign contract so a failed write leaves self._offset aligned with
+            # on-disk state.
+            self._persist_offset(reader.offset)
+            self._single_reader = None
 
     def _read_lines(self, f):
         """Read and yield all available lines from a file handle.
@@ -470,11 +588,9 @@ class Consumer:
             # Monitor). Moving this save out of finally would silently lose
             # offsets on every non-normal termination and break
             # resume-across-restarts. _catch_up_glob's inner finally has
-            # already captured any mid-file progress into self._offset.
-            try:
-                self._save_offset()
-            except OSError as e:
-                self._report_save_failure(e)
+            # already captured any mid-file progress into self._offset, so the
+            # candidate to persist is simply the offset reached.
+            self._persist_offset(self._offset)
 
     def _iterate_glob_follow(self):
         """Catch up on existing glob files, then tail for changes and new files."""
@@ -564,44 +680,18 @@ class Consumer:
                 # save-then-stop order the previous explicit finally had.
                 self._save_offset()
 
-    def _iterate_follow(self, f, path):
-        """Tail a file using watchdog for filesystem events."""
-        import queue
-
-        from watchdog.events import FileSystemEventHandler
-
-        event_queue = queue.Queue()
-
-        class Handler(FileSystemEventHandler):
-            def on_modified(self, event):
-                if Path(event.src_path).resolve() == path.resolve():
-                    event_queue.put(True)
-
-        with self._observe(str(path.parent), Handler()):
-            # First, read any existing lines
-            yield from self._read_lines(f)
-
-            # Then tail for new lines — poll on every iteration because
-            # macOS FSEvents coalesces rapid writes, so relying solely on
-            # watchdog events would miss intermediate lines.
-            while not self._closed:
-                with contextlib.suppress(queue.Empty):
-                    event_queue.get(timeout=0.5)
-
-                _drain_queue(event_queue)
-
-                yield from self._read_lines(f)
-
     def close(self) -> None:
         """Stop the consumer and save the current offset."""
         self._closed = True
 
         try:
-            # Save offset from current file position if still open.
-            # _file_handle is only set in single-file mode — glob-mode
-            # sub-generators keep their own local handles.
-            if self._file_handle is not None and not self._file_handle.closed:
-                self._offset = SingleFileOffset(byte_offset=self._file_handle.tell())
+            # Save offset from the current file position if a single-file read
+            # is in flight. _single_reader owns the handle during single-file
+            # iteration; glob-mode sub-generators keep their own local handles,
+            # so glob progress is read from self._offset instead.
+            handle = self._single_reader.file_handle if self._single_reader else None
+            if handle is not None and not handle.closed:
+                self._offset = SingleFileOffset(byte_offset=handle.tell())
                 self._save_offset()
             elif isinstance(self._offset, GlobOffset) and self._offset.encode() > 0:
                 # Glob-mode consumers track progress via self._offset rather than
