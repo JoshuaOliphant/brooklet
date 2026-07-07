@@ -1,10 +1,10 @@
 {
   "feature": "architecture-debt-refactor",
   "request": "Refactor brooklet's core/consumer.py Consumer god-object into per-mode strategy classes (single-file batch, single-file follow, glob batch, glob+follow) sharing a common offset-persistence mixin, so interrupt-safe offset saving isn't reimplemented per mode. Extract a shared contrib adapter framework that claude_analytics.py, pytest_analytics.py, and otel_consumer.py build on instead of duplicating the 3-layer (parsing -> consumer integration -> CLI plugin) pattern by convention only. Have claude_analytics.scan_sessions reuse Consumer's existing glob+follow mode instead of hand-rolling its own mtime-polling follow loop. Reduce complexity in contrib/otel_consumer.py's parsing functions.",
-  "state": "PLAN",
+  "state": "BUILD",
   "cycle": 1,
   "driver": "auto",
-  "iteration": 3,
+  "iteration": 4,
   "budgets": {
     "max_iterations": 50,
     "max_attempts_per_task": 3,
@@ -13,14 +13,20 @@
   "in_flight": [],
   "increments": [],
   "wait_ticks": 0,
-  "attempts": {},
+  "attempts": {
+    "brooklet-10r": 1,
+    "brooklet-idh": 1,
+    "brooklet-x47": 1,
+    "brooklet-60m": 1,
+    "brooklet-98i": 1
+  },
   "review": {
     "reviewers": [
       "code-review"
     ],
     "mode": "block"
   },
-  "last_progress_iteration": 2,
+  "last_progress_iteration": 4,
   "history": [
     {
       "at": "2026-07-07T14:23:04+00:00",
@@ -37,8 +43,13 @@
       "at": "2026-07-07T14:28:53+00:00",
       "to": "PLAN",
       "reason": "spec written at specs/architecture-debt-refactor-spec.md with 6 ACs covering Consumer split, contrib scaffolding, scan_sessions reuse, otel_consumer complexity, and coverage/lint bar"
+    },
+    {
+      "at": "2026-07-07T14:30:52+00:00",
+      "to": "BUILD",
+      "reason": "plan written, 8 tasks in beads with dependencies; brooklet-10r and brooklet-idh ready"
     }
   ],
   "started": "2026-07-07T14:23:04+00:00",
-  "updated": "2026-07-07T14:28:57+00:00"
+  "updated": "2026-07-07T15:02:13+00:00"
 }

@@ -69,24 +69,44 @@ enough that forcing shared aggregation logic would be a worse abstraction than t
 independent implementations. V1 scope is the scaffolding that is *actually*
 identical today, not everything the ABOUTME comments describe as parallel.
 
-## AC-4: `scan_sessions` reuses `Consumer`'s glob+follow instead of hand-rolled polling
+## AC-4: `scan_sessions` reduces hand-rolled follow-loop complexity where safe
 
-**Given** `scan_sessions`'s `follow=True` path currently reimplements its own
-mtime-based polling loop (the E-rated, complexity-32 portion of the function)
-instead of using brooklet's existing glob+follow consumer
-**When** `scan_sessions` follow mode is refactored to consume via `Consumer`'s
-glob+follow mode (or an equivalent brooklet-provided follow primitive)
-**Then** it continues to: detect new session files as they appear, re-aggregate
-sessions whose files change, and yield a `SessionStats(session_id=..., removed=True)`
-signal for sessions that leave the `--current` time window — with existing
-`claude_analytics` tests passing unchanged (or updated in place if they asserted
-implementation details rather than behavior)
+**Correction (logged as a decision during BUILD):** `scan_sessions` actually
+contains *two* independent follow-mode code paths, not one. The `current=False`
+(default) glob-mode follow path **already** consumes via `Consumer`'s glob+follow
+(`stream.consume("sessions", group="scout-follow", follow=True)`) — that part of
+the original AC-4 framing was already true before this feature started. The
+`current=True` path's follow loop is the one that hand-rolls mtime-based polling,
+and it does so because its behavior contract is fundamentally time-driven, not
+event-driven: `tests/test_scout.py::test_current_follow_yields_removal_on_file_age_out`
+requires a `removed=True` signal to fire purely from elapsed wall-clock time, with
+**no new file write required**. `Consumer`'s glob+follow only wakes callers on new
+data (watchdog events / internal poll-and-yield); it has no mechanism to invoke a
+caller on a pure timeout with zero new bytes. Forcing the `--current` removal
+signal onto `Consumer`'s primitive would either break that test's timeliness
+guarantee or require building a new timer-driven abstraction, which is out of
+scope. AC-4 is revised accordingly:
+
+**Given** `scan_sessions`'s `current=True, follow=True` branch is a single
+104-line inline block (part of why the function is E-rated at complexity 32),
+with its active-file resolution logic (mtime filtering by `window_minutes`)
+duplicated between the initial scan (before the loop) and the loop's rescans
+**When** the `--current` mode (both its one-shot and follow variants) is
+decomposed into its own well-named helper(s), and the duplicated active-file
+resolution is extracted into one shared helper
+**Then** `scan_sessions`'s complexity drops materially (target: no single
+function in the file above complexity 15), the polling *mechanism* for
+`--current` follow is unchanged (still time-driven, still meets the age-out
+test's timeliness guarantee), and all existing `claude_analytics`/`scout` tests
+pass unchanged
 
 **Edge cases:**
 - `window_minutes=0` (single most-recent-file backward-compat mode) continues to
   work.
 - A session file that is deleted while being watched does not crash the follow
   loop.
+- The already-correct `current=False` glob+follow path (verified by
+  `test_scan_sessions_glob_follow_groups_events_by_session`) is not regressed.
 
 ## AC-5: `otel_consumer.py` parsing complexity is reduced
 
