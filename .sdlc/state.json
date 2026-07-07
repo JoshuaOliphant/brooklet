@@ -1,10 +1,10 @@
 {
   "feature": "architecture-debt-refactor",
   "request": "Refactor brooklet's core/consumer.py Consumer god-object into per-mode strategy classes (single-file batch, single-file follow, glob batch, glob+follow) sharing a common offset-persistence mixin, so interrupt-safe offset saving isn't reimplemented per mode. Extract a shared contrib adapter framework that claude_analytics.py, pytest_analytics.py, and otel_consumer.py build on instead of duplicating the 3-layer (parsing -> consumer integration -> CLI plugin) pattern by convention only. Have claude_analytics.scan_sessions reuse Consumer's existing glob+follow mode instead of hand-rolling its own mtime-polling follow loop. Reduce complexity in contrib/otel_consumer.py's parsing functions.",
-  "state": "BUILD",
+  "state": "SHIP",
   "cycle": 1,
   "driver": "auto",
-  "iteration": 4,
+  "iteration": 9,
   "budgets": {
     "max_iterations": 50,
     "max_attempts_per_task": 3,
@@ -12,13 +12,21 @@
   },
   "in_flight": [],
   "increments": [],
-  "wait_ticks": 0,
+  "wait_ticks": 1,
   "attempts": {
     "brooklet-10r": 1,
     "brooklet-idh": 1,
     "brooklet-x47": 1,
     "brooklet-60m": 1,
-    "brooklet-98i": 1
+    "brooklet-98i": 1,
+    "brooklet-3gm": 1,
+    "brooklet-qgg": 1,
+    "brooklet-inc": 1,
+    "brooklet-11t": 1,
+    "brooklet-r5v": 1,
+    "brooklet-q5y": 1,
+    "brooklet-yy5": 1,
+    "brooklet-wgd": 1
   },
   "review": {
     "reviewers": [
@@ -26,7 +34,7 @@
     ],
     "mode": "block"
   },
-  "last_progress_iteration": 4,
+  "last_progress_iteration": 9,
   "history": [
     {
       "at": "2026-07-07T14:23:04+00:00",
@@ -48,8 +56,38 @@
       "at": "2026-07-07T14:30:52+00:00",
       "to": "BUILD",
       "reason": "plan written, 8 tasks in beads with dependencies; brooklet-10r and brooklet-idh ready"
+    },
+    {
+      "at": "2026-07-07T15:15:18+00:00",
+      "to": "VERIFY",
+      "reason": "all 8 tasks (T1-T8) closed: Consumer split into _GlobCatchUp/_SingleFileReader, shared contrib cli_options.py, scan_sessions decomposed, otel_consumer deduped, coverage/lint sweep clean, docs updated"
+    },
+    {
+      "at": "2026-07-07T15:17:12+00:00",
+      "to": "REVIEW",
+      "reason": "spec compliance confirmed AC-1 through AC-6; mechanical checks green; telemetry sanity-checked"
+    },
+    {
+      "at": "2026-07-07T15:27:23+00:00",
+      "to": "BUILD",
+      "reason": "review found 1 real bug + 2 cleanup findings; filed as fix tasks brooklet-11t/5rz/r5v; mode=block requires fixing before SHIP"
+    },
+    {
+      "at": "2026-07-07T15:33:49+00:00",
+      "to": "VERIFY",
+      "reason": "all 3 review fixes complete and independently verified; 472 tests pass, 100% coverage, ruff clean"
+    },
+    {
+      "at": "2026-07-07T15:34:03+00:00",
+      "to": "REVIEW",
+      "reason": "fixes verified clean, re-running review gate before SHIP"
+    },
+    {
+      "at": "2026-07-07T15:53:39+00:00",
+      "to": "SHIP",
+      "reason": "review gate clean after 2 fix round-trips + 1 trivial doc correction; 472 tests pass, 100% coverage on all touched files, ruff clean"
     }
   ],
   "started": "2026-07-07T14:23:04+00:00",
-  "updated": "2026-07-07T15:02:13+00:00"
+  "updated": "2026-07-07T15:55:07+00:00"
 }
