@@ -14,6 +14,7 @@ import typer
 
 import brooklet
 from brooklet.cli.plugins import hookimpl
+from brooklet.contrib.cli_options import StreamDirOption
 from brooklet.contrib.topic_tee import tee_to_topic
 from brooklet.core.types import Mode
 
@@ -320,14 +321,7 @@ class PytestPlugin:
             output: Annotated[
                 str | None, typer.Option(help="Produce stats to a brooklet topic.")
             ] = None,
-            stream_dir: Annotated[
-                Path | None,
-                typer.Option(
-                    "--stream-dir",
-                    envvar="BROOKLET_DIR",
-                    help="Stream directory for --output topic. Defaults to report file's parent.",
-                ),
-            ] = None,
+            stream_dir: StreamDirOption = None,
         ) -> None:
             """Consume pytest-reportlog JSONL and report test analytics."""
             mode = "glob" if glob else "single-file"

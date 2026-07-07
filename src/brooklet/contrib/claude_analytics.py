@@ -17,6 +17,7 @@ import typer
 
 import brooklet
 from brooklet.cli.plugins import hookimpl
+from brooklet.contrib.cli_options import StreamDirOption
 from brooklet.contrib.topic_tee import tee_to_topic
 
 # ---------------------------------------------------------------------------
@@ -617,14 +618,7 @@ class ScoutPlugin:
             output: Annotated[
                 str | None, typer.Option(help="Produce stats to a brooklet topic.")
             ] = None,
-            stream_dir: Annotated[
-                Path | None,
-                typer.Option(
-                    "--stream-dir",
-                    envvar="BROOKLET_DIR",
-                    help="Stream directory for --output topic. Defaults to path.",
-                ),
-            ] = None,
+            stream_dir: StreamDirOption = None,
         ) -> None:
             """Scan Claude Code session JSONL files and report analytics."""
             stats_iter = scan_sessions(

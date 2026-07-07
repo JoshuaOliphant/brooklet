@@ -15,6 +15,7 @@ import typer
 
 import brooklet
 from brooklet.cli.plugins import hookimpl
+from brooklet.contrib.cli_options import StreamDirOption
 
 _logger = logging.getLogger("brooklet.contrib.otel")
 
@@ -323,10 +324,7 @@ class OtelPlugin:
             ],
             follow: Annotated[bool, typer.Option(help="Tail for new spans")] = False,
             group: Annotated[str, typer.Option(help="Consumer group name")] = "otel",
-            stream_dir: Annotated[
-                Path | None,
-                typer.Option("--stream-dir", envvar="BROOKLET_DIR", help="Brooklet stream dir"),
-            ] = None,
+            stream_dir: StreamDirOption = None,
         ) -> None:
             """Show OTLP trace spans from Vector JSONL output."""
             for span in scan_traces(
@@ -341,10 +339,7 @@ class OtelPlugin:
             ],
             follow: Annotated[bool, typer.Option(help="Tail for new metrics")] = False,
             group: Annotated[str, typer.Option(help="Consumer group name")] = "otel",
-            stream_dir: Annotated[
-                Path | None,
-                typer.Option("--stream-dir", envvar="BROOKLET_DIR", help="Brooklet stream dir"),
-            ] = None,
+            stream_dir: StreamDirOption = None,
         ) -> None:
             """Show OTLP metrics from Vector JSONL output."""
             for m in scan_metrics(
@@ -359,10 +354,7 @@ class OtelPlugin:
             ],
             follow: Annotated[bool, typer.Option(help="Tail for new log records")] = False,
             group: Annotated[str, typer.Option(help="Consumer group name")] = "otel",
-            stream_dir: Annotated[
-                Path | None,
-                typer.Option("--stream-dir", envvar="BROOKLET_DIR", help="Brooklet stream dir"),
-            ] = None,
+            stream_dir: StreamDirOption = None,
         ) -> None:
             """Show OTLP log records from Vector JSONL output."""
             for log in scan_logs(
