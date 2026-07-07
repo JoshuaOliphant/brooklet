@@ -35,7 +35,7 @@ Source layout uses three subpackages so directory names communicate intent (the 
 - `contrib/pytest_analytics.py` — pytest-reportlog test run analytics (`brooklet pytest scan`)
 - `contrib/otel.py` — Optional OpenTelemetry instrumentation (tracing + metrics); no-op without SDK
 - `contrib/topic_tee.py` — `tee_to_topic()`: shared passthrough sink for scan commands' `--output` mode (produce each stat to a topic, warn-not-raise on failure)
-- `contrib/cli_options.py` — `StreamDirOption`: shared `--stream-dir` Typer option definition, used by every adapter's CLI command instead of each retyping the same `Annotated[Path | None, ...]` shape
+- `contrib/cli_options.py` — Shared `--stream-dir` Typer option definitions: `StreamDirOption` for adapters with an `--output` flag (scout, pytest) and `StreamDirOptionFollowOnly` for adapters without one (otel), so adapters reference one of two definitions instead of each retyping the `Annotated[Path | None, ...]` shape
 
 ### Key Decisions
 - `produce()` is in core — consumers that transform and re-emit need a clean write path (DEC-011)
