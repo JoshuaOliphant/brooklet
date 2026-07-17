@@ -41,6 +41,291 @@ def _find_start_index(segment_numbers: list[int], target_segment: int) -> int:
     return bisect.bisect_left(segment_numbers, target_segment)
 
 
+class _GlobCatchUp:
+    """Reads all unread events across glob-matched files, tracking a GlobOffset.
+
+    Owns its own coordination state — the active file handle and the running
+    GlobOffset — so the mid-file position can be captured internally when the
+    generator is torn down mid-iteration (KeyboardInterrupt/GeneratorExit from
+    a supervisor). Callers read the offset reached so far via `.offset` after
+    (or during) iteration, instead of the state machine reaching back into a
+    Consumer's mutable attributes.
+
+    For files following the data-NNNN.jsonl naming convention, uses segment
+    numbers and binary search to find the starting position; this correctly
+    handles gaps from segment deletion/compaction. For other glob sources,
+    falls back to positional indexing.
+
+    `file_positions` is the shared follow-mode buffer owned by the calling
+    Consumer: during follow mode this unit seeds it with each file's end
+    position so the Consumer's subsequent tailing loop can resume from there.
+    """
+
+    def __init__(
+        self,
+        *,
+        offset: GlobOffset,
+        follow: bool,
+        topic: str,
+        group: str,
+        read_lines,
+        file_positions: dict[str, int],
+    ) -> None:
+        self._offset = offset
+        self._follow = follow
+        self._topic = topic
+        self._group = group
+        self._read_lines = read_lines
+        self._file_positions = file_positions
+        # Active file handle during a read, so the per-file finally can
+        # capture mid-file progress if iteration is interrupted.
+        self._active_file = None
+
+    @property
+    def offset(self) -> GlobOffset:
+        """The GlobOffset reached so far (advanced live during iteration)."""
+        return self._offset
+
+    def events(self, files: list[str]) -> Iterator[Event]:
+        """Yield all unread events across `files`, advancing `self._offset`."""
+        if not files:
+            self._handle_no_files()
+            return
+
+        segment_numbers, start_idx, start_byte_offset = self._plan(files)
+
+        for i, filepath in enumerate(files):
+            if i < start_idx:
+                self._record_skipped(filepath)
+                continue
+            seek = start_byte_offset if i == start_idx else 0
+            yield from self._read_file(files, segment_numbers, i, filepath, seek)
+
+    def _handle_no_files(self) -> None:
+        """Reset a non-zero offset (with a logged error) when nothing matched."""
+        if self._offset.segment_number != 0 or self._offset.byte_offset != 0:
+            logger.error(
+                "Glob matched no files but offset is non-zero "
+                "(segment_number=%d, byte_offset=%d). "
+                "Resetting offset (topic=%s, group=%s).",
+                self._offset.segment_number,
+                self._offset.byte_offset,
+                self._topic,
+                self._group,
+            )
+            self._offset = GlobOffset(segment_number=0, byte_offset=0)
+
+    def _plan(self, files: list[str]) -> tuple[list[int], int, int]:
+        """Resolve (segment_numbers, start_idx, start_byte_offset) for `files`."""
+        parsed = [segments.parse_number(f) for f in files]
+        if all(sn is not None for sn in parsed):
+            # Segment-number-based lookup via binary search — stable across deletion
+            segment_numbers: list[int] = [sn for sn in parsed if sn is not None]
+            start_idx = _find_start_index(segment_numbers, self._offset.segment_number)
+            # Only apply saved byte_offset if the target segment is exactly the saved one
+            if start_idx < len(files) and segment_numbers[start_idx] == self._offset.segment_number:
+                start_byte_offset = self._offset.byte_offset
+            else:
+                start_byte_offset = 0
+            return segment_numbers, start_idx, start_byte_offset
+        return self._plan_positional(files)
+
+    def _plan_positional(self, files: list[str]) -> tuple[list[int], int, int]:
+        """Positional fallback for external glob sources not using segment names."""
+        segment_numbers = list(range(len(files)))
+        start_idx = self._offset.segment_number
+        start_byte_offset = self._offset.byte_offset
+
+        if start_idx >= len(files):
+            logger.error(
+                "Saved segment_number %d is out of bounds (only %d files matched). "
+                "Files may have been added or removed between sessions. "
+                "Resetting to start of all files (topic=%s, group=%s).",
+                start_idx,
+                len(files),
+                self._topic,
+                self._group,
+            )
+            start_idx = 0
+            start_byte_offset = 0
+            self._offset = GlobOffset(segment_number=0, byte_offset=0)
+        return segment_numbers, start_idx, start_byte_offset
+
+    def _record_skipped(self, filepath: str) -> None:
+        """Record a skipped file's size in the follow-mode position buffer."""
+        if self._follow:
+            try:
+                self._file_positions[filepath] = Path(filepath).stat().st_size
+            except OSError as e:
+                logger.warning(
+                    "Cannot stat skipped file %s (topic=%s, group=%s): %s",
+                    filepath,
+                    self._topic,
+                    self._group,
+                    e,
+                )
+
+    def _advance(
+        self, files: list[str], segment_numbers: list[int], i: int, end_pos: int = 0
+    ) -> GlobOffset:
+        """Offset positioned after file `i`: at end_pos if last, else next segment start."""
+        if i == len(files) - 1:
+            return GlobOffset(segment_number=segment_numbers[i], byte_offset=end_pos)
+        return GlobOffset(segment_number=segment_numbers[i + 1], byte_offset=0)
+
+    def _read_file(
+        self,
+        files: list[str],
+        segment_numbers: list[int],
+        i: int,
+        filepath: str,
+        seek: int,
+    ) -> Iterator[Event]:
+        """Yield events from one file, advancing the offset past it when done."""
+        try:
+            f = open(filepath)  # noqa: SIM115
+        except OSError as e:
+            logger.warning(
+                "Cannot open file %s during catch-up (topic=%s, group=%s): %s",
+                filepath,
+                self._topic,
+                self._group,
+                e,
+            )
+            self._offset = self._advance(files, segment_numbers, i)
+            return
+
+        try:
+            f.seek(seek)
+            # Track active file so the finally can capture mid-file progress
+            # if iteration is interrupted (e.g. KeyboardInterrupt from a
+            # supervisor like Claude Code's Monitor).
+            self._active_file = f
+
+            yield from self._read_lines(f)
+
+            end_pos = f.tell()
+            if self._follow:
+                self._file_positions[filepath] = end_pos
+            self._offset = self._advance(files, segment_numbers, i, end_pos)
+            # Normal path: release the tracker so the finally leaves the
+            # advanced offset in place.
+            self._active_file = None
+        finally:
+            # On exception paths (GeneratorExit / user exception raised through
+            # the yield), capture the mid-file position so callers persist it.
+            # On the normal path the tracker was already cleared, so the
+            # advanced offset stands.
+            if self._active_file is f:
+                with contextlib.suppress(OSError, ValueError):
+                    self._offset = GlobOffset(
+                        segment_number=segment_numbers[i], byte_offset=f.tell()
+                    )
+                self._active_file = None
+            f.close()
+
+
+class _SingleFileReader:
+    """Reads unread lines from one JSONL file, tracking a SingleFileOffset.
+
+    Owns the open file handle and the running SingleFileOffset so the byte
+    position reached is captured internally when the generator is torn down
+    mid-iteration (a KeyboardInterrupt/GeneratorExit raised through the yield by
+    a supervisor like Claude Code's Monitor). The calling Consumer reads the
+    position reached via `.offset` and persists it, mirroring how `_GlobCatchUp`
+    hands its offset back instead of the state machine reaching into a
+    Consumer's mutable attributes.
+
+    Batch mode reads to EOF and returns; follow mode tails the file via the
+    caller-supplied `observe` context manager, polling on every wakeup because
+    macOS FSEvents coalesces rapid writes. `file_handle` is exposed only so a
+    concurrent Consumer.close() can snapshot the live position from another
+    thread while iteration is suspended at a yield.
+    """
+
+    def __init__(
+        self,
+        *,
+        path: Path,
+        offset: SingleFileOffset,
+        follow: bool,
+        read_lines,
+        observe,
+        is_closed,
+    ) -> None:
+        self._path = path
+        self._offset = offset
+        self._follow = follow
+        self._read_lines = read_lines
+        self._observe = observe
+        self._is_closed = is_closed
+        self._file = None
+
+    @property
+    def offset(self) -> SingleFileOffset:
+        """The SingleFileOffset reached so far (byte position after teardown)."""
+        return self._offset
+
+    @property
+    def file_handle(self):
+        """The active file handle, or None outside a read.
+
+        Exposed so Consumer.close() can snapshot the live byte position while
+        iteration is suspended at a yield in another thread.
+        """
+        return self._file
+
+    def events(self) -> Iterator[Event]:
+        """Yield unread lines, capturing the final byte position on teardown."""
+        f = open(self._path)  # noqa: SIM115
+        self._file = f
+        try:
+            f.seek(self._offset.byte_offset)
+            if self._follow:
+                yield from self._tail(f)
+            else:
+                yield from self._read_lines(f)
+        finally:
+            # Capture the position reached — EOF on the normal path, the
+            # mid-file position on interruption — so the caller persists it.
+            # Follow-mode iterators exit via exception (KeyboardInterrupt from
+            # SIGTERM), never by returning, so this must run in finally or every
+            # non-normal termination would silently lose the offset.
+            if not f.closed:
+                self._offset = SingleFileOffset(byte_offset=f.tell())
+            self._file = None
+            f.close()
+
+    def _tail(self, f) -> Iterator[Event]:
+        """Tail the file for appended lines using a watchdog observer."""
+        import queue
+
+        from watchdog.events import FileSystemEventHandler
+
+        path = self._path
+        event_queue = queue.Queue()
+
+        class Handler(FileSystemEventHandler):
+            def on_modified(self, event):
+                if Path(event.src_path).resolve() == path.resolve():
+                    event_queue.put(True)
+
+        with self._observe(str(path.parent), Handler()):
+            # First, read any existing lines.
+            yield from self._read_lines(f)
+
+            # Then tail for new lines — poll on every iteration because macOS
+            # FSEvents coalesces rapid writes, so relying solely on watchdog
+            # events would miss intermediate lines.
+            while not self._is_closed():
+                with contextlib.suppress(queue.Empty):
+                    event_queue.get(timeout=0.5)
+
+                _drain_queue(event_queue)
+
+                yield from self._read_lines(f)
+
+
 class Consumer:
     """Iterator over JSONL events with offset tracking.
 
@@ -72,16 +357,20 @@ class Consumer:
         # brooklet-a2c.
         self._seq_tracker = SeqTracker(source=source)
         self._closed = False
-        self._file_handle = None
+        # Set for the duration of single-file iteration so close() can snapshot
+        # the reader's live file position from another thread; None otherwise.
+        self._single_reader: _SingleFileReader | None = None
+        # Set for the duration of glob catch-up so close() can read the live
+        # GlobOffset reached so far from another thread; None outside catch-up
+        # (before it starts, and during glob-follow tailing where self._offset
+        # is already current). Mirrors self._single_reader.
+        self._glob_catch_up: _GlobCatchUp | None = None
         self._observer = None
 
         self._offset: SingleFileOffset | GlobOffset = self._load_offset()
-        # Per-file byte positions used during glob+follow tailing
+        # Shared follow-mode buffer: _GlobCatchUp seeds each file's end
+        # position here during catch-up so the tailing loop can resume from it.
         self._file_positions: dict[str, int] = {}
-        # Active file handle + index during glob catch-up, so the finally
-        # block can capture mid-file progress on exception paths.
-        self._glob_active_file = None
-        self._glob_active_index: int = 0
 
     def _load_offset(self) -> SingleFileOffset | GlobOffset:
         """Load offset from storage, returning the appropriate typed offset."""
@@ -100,6 +389,24 @@ class Consumer:
         """
         target = self._offset if offset is None else offset
         save(self._offsets_dir, self._group, self._topic, target.encode())
+
+    def _persist_offset(self, candidate: SingleFileOffset | GlobOffset) -> None:
+        """Persist `candidate` at teardown, reporting — not raising — on OSError.
+
+        The single home for how brooklet survives an offset-save failure when a
+        read winds down. Saves the candidate first and rebinds self._offset only
+        on success (save-before-assign), so a failed write leaves self._offset
+        aligned with the last value actually on disk rather than a phantom
+        position that was never persisted. Shared by single-file teardown (where
+        the candidate is the fresh f.tell() position the reader reached) and
+        glob-batch teardown (where the candidate is the offset _GlobCatchUp
+        already advanced into self._offset).
+        """
+        try:
+            self._save_offset(candidate)
+            self._offset = candidate
+        except OSError as e:
+            self._report_save_failure(e)
 
     def _report_save_failure(self, exc: BaseException) -> None:
         """Report an offset-save failure to both structured logs and stderr.
@@ -175,7 +482,12 @@ class Consumer:
             raise ValueError(f"Unknown consumer mode: {self._mode!r}")
 
     def _iterate_single_file(self):
-        """Read events from a single JSONL file."""
+        """Read events from a single JSONL file via a `_SingleFileReader`.
+
+        The reader owns the file handle and byte-offset tracking; this method
+        only guards the nonexistent-file case, exposes the reader to close() for
+        the duration of the read, and persists the position the reader reached.
+        """
         path = Path(self._path).expanduser()
         if not path.exists():
             warnings.warn(
@@ -185,37 +497,29 @@ class Consumer:
             )
             return
 
-        f = open(path)  # noqa: SIM115
-        self._file_handle = f
+        assert isinstance(self._offset, SingleFileOffset)
+        reader = _SingleFileReader(
+            path=path,
+            offset=self._offset,
+            follow=self._follow,
+            read_lines=self._read_lines,
+            observe=self._observe,
+            is_closed=lambda: self._closed,
+        )
+        self._single_reader = reader
         try:
-            assert isinstance(self._offset, SingleFileOffset)
-            f.seek(self._offset.byte_offset)
-
-            if self._follow:
-                yield from self._iterate_follow(f, path)
-            else:
-                yield from self._read_lines(f)
+            yield from reader.events()
         finally:
             # Must live in finally, not after the yield loop — follow-mode
             # iterators exit via exception (KeyboardInterrupt from SIGTERM,
-            # typically from a supervisor like Claude Code's Monitor), never
-            # by returning normally. Moving this save out of finally would
-            # silently lose offsets on every non-normal termination and
-            # break resume-across-restarts.
-            if not f.closed:
-                # Save-before-assign: compute the candidate locally, save
-                # it first, and only rebind self._offset on success. If the
-                # save raises, self._offset stays aligned with on-disk
-                # state so close() and any later inspection see consistent
-                # data.
-                candidate = SingleFileOffset(byte_offset=f.tell())
-                try:
-                    self._save_offset(candidate)
-                    self._offset = candidate
-                except OSError as e:
-                    self._report_save_failure(e)
-            self._file_handle = None
-            f.close()
+            # typically from a supervisor like Claude Code's Monitor), never by
+            # returning normally. Moving this save out of finally would silently
+            # lose offsets on every non-normal termination and break
+            # resume-across-restarts. _persist_offset applies the save-before-
+            # assign contract so a failed write leaves self._offset aligned with
+            # on-disk state.
+            self._persist_offset(reader.offset)
+            self._single_reader = None
 
     def _read_lines(self, f):
         """Read and yield all available lines from a file handle.
@@ -248,138 +552,31 @@ class Consumer:
     def _catch_up_glob(self, files: list[str]) -> Iterator[Event]:
         """Read all unread events from glob-matched files, updating offset.
 
-        Shared between batch glob and glob+follow modes. During follow mode,
-        also populates _file_positions for subsequent tailing.
-
-        For files following the data-NNNN.jsonl naming convention, uses
-        segment numbers and binary search to find the starting position.
-        This correctly handles gaps from segment deletion/compaction.
-        For other glob sources, falls back to positional indexing.
+        Delegates to `_GlobCatchUp`, which owns the catch-up coordination
+        state internally. Shared between batch glob and glob+follow modes;
+        during follow mode `_GlobCatchUp` seeds `_file_positions` for the
+        subsequent tailing loop. The offset reached — including any mid-file
+        position captured on interruption — is synced back into `self._offset`
+        so the callers' `finally` blocks persist it.
         """
         assert isinstance(self._offset, GlobOffset)
 
-        if not files:
-            if self._offset.segment_number != 0 or self._offset.byte_offset != 0:
-                logger.error(
-                    "Glob matched no files but offset is non-zero "
-                    "(segment_number=%d, byte_offset=%d). "
-                    "Resetting offset (topic=%s, group=%s).",
-                    self._offset.segment_number,
-                    self._offset.byte_offset,
-                    self._topic,
-                    self._group,
-                )
-                self._offset = GlobOffset(segment_number=0, byte_offset=0)
-            return
-
-        # Determine whether all files follow the data-NNNN.jsonl convention
-        parsed = [segments.parse_number(f) for f in files]
-        use_segments = all(sn is not None for sn in parsed)
-
-        if use_segments:
-            # Segment-number-based lookup via binary search — stable across deletion
-            segment_numbers: list[int] = [sn for sn in parsed if sn is not None]
-            start_idx = _find_start_index(segment_numbers, self._offset.segment_number)
-            # Only apply saved byte_offset if the target segment is exactly the saved one
-            if start_idx < len(files) and segment_numbers[start_idx] == self._offset.segment_number:
-                start_byte_offset = self._offset.byte_offset
-            else:
-                start_byte_offset = 0
-        else:
-            # Positional fallback for external glob sources
-            segment_numbers = list(range(len(files)))
-            start_idx = self._offset.segment_number
-            start_byte_offset = self._offset.byte_offset
-
-            if start_idx >= len(files):
-                logger.error(
-                    "Saved segment_number %d is out of bounds (only %d files matched). "
-                    "Files may have been added or removed between sessions. "
-                    "Resetting to start of all files (topic=%s, group=%s).",
-                    start_idx,
-                    len(files),
-                    self._topic,
-                    self._group,
-                )
-                start_idx = 0
-                start_byte_offset = 0
-                self._offset = GlobOffset(segment_number=0, byte_offset=0)
-
-        for i, filepath in enumerate(files):
-            if i < start_idx:
-                # Still record position for follow mode
-                if self._follow:
-                    try:
-                        self._file_positions[filepath] = Path(filepath).stat().st_size
-                    except OSError as e:
-                        logger.warning(
-                            "Cannot stat skipped file %s (topic=%s, group=%s): %s",
-                            filepath,
-                            self._topic,
-                            self._group,
-                            e,
-                        )
-                continue
-
-            try:
-                f = open(filepath)  # noqa: SIM115
-            except OSError as e:
-                logger.warning(
-                    "Cannot open file %s during catch-up (topic=%s, group=%s): %s",
-                    filepath,
-                    self._topic,
-                    self._group,
-                    e,
-                )
-                # Advance offset past this file
-                seg_num = segment_numbers[i]
-                if i == len(files) - 1:
-                    self._offset = GlobOffset(segment_number=seg_num, byte_offset=0)
-                else:
-                    next_seg = segment_numbers[i + 1]
-                    self._offset = GlobOffset(segment_number=next_seg, byte_offset=0)
-                continue
-
-            try:
-                if i == start_idx:
-                    f.seek(start_byte_offset)
-
-                # Track active file so the batch finally block can capture
-                # mid-file progress if iteration is interrupted (e.g.
-                # KeyboardInterrupt from a supervisor like Claude Code's
-                # Monitor).
-                self._glob_active_file = f
-                self._glob_active_index = i
-
-                yield from self._read_lines(f)
-
-                end_pos = f.tell()
-                if self._follow:
-                    self._file_positions[filepath] = end_pos
-
-                # After reading this file, update offset to next file
-                seg_num = segment_numbers[i]
-                if i == len(files) - 1:
-                    self._offset = GlobOffset(segment_number=seg_num, byte_offset=end_pos)
-                else:
-                    next_seg = segment_numbers[i + 1]
-                    self._offset = GlobOffset(segment_number=next_seg, byte_offset=0)
-                # Normal path: release the active-file tracker so the
-                # finally below leaves self._offset at the advanced value.
-                self._glob_active_file = None
-            finally:
-                # On exception paths (GeneratorExit / user exception raised
-                # through the yield), capture the mid-file position into
-                # self._offset so the outer _iterate_glob finally can persist
-                # it. On the normal path the tracker was already cleared, so
-                # we leave self._offset at its advanced value.
-                if self._glob_active_file is f:
-                    with contextlib.suppress(OSError, ValueError):
-                        self._offset = GlobOffset(
-                            segment_number=segment_numbers[i], byte_offset=f.tell()
-                        )
-                    self._glob_active_file = None
-                f.close()
+        catch_up = _GlobCatchUp(
+            offset=self._offset,
+            follow=self._follow,
+            topic=self._topic,
+            group=self._group,
+            read_lines=self._read_lines,
+            file_positions=self._file_positions,
+        )
+        # Expose the live unit so a concurrent close() reads the offset reached
+        # so far instead of the stale pre-catch-up self._offset.
+        self._glob_catch_up = catch_up
+        try:
+            yield from catch_up.events(files)
+        finally:
+            self._offset = catch_up.offset
+            self._glob_catch_up = None
 
     def _iterate_glob(self):
         """Read events across multiple files matched by glob pattern."""
@@ -400,11 +597,9 @@ class Consumer:
             # Monitor). Moving this save out of finally would silently lose
             # offsets on every non-normal termination and break
             # resume-across-restarts. _catch_up_glob's inner finally has
-            # already captured any mid-file progress into self._offset.
-            try:
-                self._save_offset()
-            except OSError as e:
-                self._report_save_failure(e)
+            # already captured any mid-file progress into self._offset, so the
+            # candidate to persist is simply the offset reached.
+            self._persist_offset(self._offset)
 
     def _iterate_glob_follow(self):
         """Catch up on existing glob files, then tail for changes and new files."""
@@ -494,50 +689,29 @@ class Consumer:
                 # save-then-stop order the previous explicit finally had.
                 self._save_offset()
 
-    def _iterate_follow(self, f, path):
-        """Tail a file using watchdog for filesystem events."""
-        import queue
-
-        from watchdog.events import FileSystemEventHandler
-
-        event_queue = queue.Queue()
-
-        class Handler(FileSystemEventHandler):
-            def on_modified(self, event):
-                if Path(event.src_path).resolve() == path.resolve():
-                    event_queue.put(True)
-
-        with self._observe(str(path.parent), Handler()):
-            # First, read any existing lines
-            yield from self._read_lines(f)
-
-            # Then tail for new lines — poll on every iteration because
-            # macOS FSEvents coalesces rapid writes, so relying solely on
-            # watchdog events would miss intermediate lines.
-            while not self._closed:
-                with contextlib.suppress(queue.Empty):
-                    event_queue.get(timeout=0.5)
-
-                _drain_queue(event_queue)
-
-                yield from self._read_lines(f)
-
     def close(self) -> None:
         """Stop the consumer and save the current offset."""
         self._closed = True
 
         try:
-            # Save offset from current file position if still open.
-            # _file_handle is only set in single-file mode — glob-mode
-            # sub-generators keep their own local handles.
-            if self._file_handle is not None and not self._file_handle.closed:
-                self._offset = SingleFileOffset(byte_offset=self._file_handle.tell())
+            # Save offset from the current file position if a single-file read
+            # is in flight. _single_reader owns the handle during single-file
+            # iteration; glob-mode sub-generators keep their own local handles,
+            # so glob progress is read from self._offset instead.
+            handle = self._single_reader.file_handle if self._single_reader else None
+            if handle is not None and not handle.closed:
+                self._offset = SingleFileOffset(byte_offset=handle.tell())
                 self._save_offset()
-            elif isinstance(self._offset, GlobOffset) and self._offset.encode() > 0:
-                # Glob-mode consumers track progress via self._offset rather than
-                # _file_handle (which is local to the sub-generators). Save any
-                # progress accumulated so far so restarts resume correctly.
-                self._save_offset()
+            elif isinstance(self._offset, GlobOffset):
+                # Read the live GlobOffset: during catch-up it lives on the
+                # active _GlobCatchUp unit (self._offset is still the stale
+                # pre-catch-up value until _catch_up_glob's finally syncs it
+                # back); outside catch-up (before it starts, or during
+                # glob-follow tailing) self._offset is already current.
+                live = self._glob_catch_up.offset if self._glob_catch_up else self._offset
+                if live.encode() > 0:
+                    self._offset = live
+                    self._save_offset()
         finally:
             if self._observer is not None:
                 self._stop_observer(self._observer)

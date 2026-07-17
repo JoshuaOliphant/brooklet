@@ -659,6 +659,59 @@ class TestConsumerOffsetSaveDurability:
         assert "brooklet" in captured.err
         assert "glob-save-fail" in captured.err
 
+    def test_glob_catch_up_concurrent_close_persists_live_offset(self, tmp_path, offsets_dir):
+        """close() from another thread during glob catch-up must persist the
+        progress already made, not the stale pre-catch-up offset (brooklet-11t).
+
+        Reproduces the regression: a background thread iterates a glob consumer;
+        after data-0001 is fully read and iteration has advanced into data-0002,
+        the main thread calls close(). The persisted offset must reflect that
+        data-0001 was consumed, otherwise a restart redelivers its events.
+        """
+        import threading
+
+        from brooklet.core.types import GlobOffset
+        from brooklet.storage.offsets import load
+
+        dir_ = tmp_path / "sessions"
+        dir_.mkdir()
+        for num, event in [(1, {"type": "a1"}), (2, {"type": "b1"}), (3, {"type": "c1"})]:
+            with open(dir_ / f"data-{num:04d}.jsonl", "w") as f:
+                f.write(json.dumps(event) + "\n")
+
+        consumer = Consumer(
+            path=str(dir_ / "data-*.jsonl"),
+            mode="glob",
+            group="test",
+            topic="glob-live-close",
+            offsets_dir=offsets_dir,
+        )
+
+        collected = []
+        past_first_file = threading.Event()
+        proceed = threading.Event()
+
+        def consume():
+            for i, event in enumerate(consumer):
+                collected.append(event)
+                if i == 1:
+                    # data-0001 fully read, suspended mid-catch-up in data-0002.
+                    past_first_file.set()
+                    proceed.wait(timeout=5.0)
+
+        t = threading.Thread(target=consume, daemon=True)
+        t.start()
+        assert past_first_file.wait(timeout=5.0)
+
+        consumer.close()
+        persisted = GlobOffset.decode(load(offsets_dir, "test", "glob-live-close"))
+
+        proceed.set()
+        t.join(timeout=5.0)
+
+        # Progress past data-0001 (segment 1) must be persisted — not (0, 0).
+        assert persisted.segment_number >= 2
+
 
 class TestConsumerSegmentSearch:
     """Tests for segment-number-based binary search in glob catch-up."""
@@ -895,3 +948,160 @@ class TestTopicMonotonicSeq:
         assert seqs[0] == 100
         assert seqs[1] > 100
         assert seqs[0] < seqs[1]
+
+
+class TestGlobCatchUpUnit:
+    """Directly exercises the extracted `_GlobCatchUp` state machine in isolation.
+
+    These pin the unit's public contract — `events()` iteration plus the
+    `offset` reached so far — independent of the `Consumer` that drives it.
+    """
+
+    def _segments(self, tmp_path, *batches):
+        """Write data-NNNN.jsonl segment files, returning their sorted paths."""
+        paths = []
+        for n, events in enumerate(batches, start=1):
+            path = tmp_path / f"data-{n:04d}.jsonl"
+            with open(path, "w") as f:
+                for e in events:
+                    f.write(json.dumps(e) + "\n")
+            paths.append(str(path))
+        return sorted(paths)
+
+    def _catch_up(self, tmp_path, **kwargs):
+        """Build a `_GlobCatchUp` borrowing a real Consumer's `_read_lines`."""
+        from brooklet.core.consumer import Consumer, _GlobCatchUp
+        from brooklet.core.types import GlobOffset
+
+        consumer = Consumer(
+            path=str(tmp_path / "data-*.jsonl"),
+            mode="glob",
+            group="g",
+            topic="t",
+            offsets_dir=str(tmp_path / "offsets"),
+            follow=kwargs.get("follow", False),
+        )
+        file_positions = kwargs.get("file_positions", {})
+        return _GlobCatchUp(
+            offset=kwargs.get("offset", GlobOffset(0, 0)),
+            follow=kwargs.get("follow", False),
+            topic="t",
+            group="g",
+            read_lines=consumer._read_lines,
+            file_positions=file_positions,
+        )
+
+    def test_full_read_advances_offset_to_last_segment(self, tmp_path):
+        """Reading all segments leaves the offset at the last segment, byte>0."""
+        files = self._segments(tmp_path, [{"x": 1}, {"x": 2}], [{"y": 1}])
+        catch_up = self._catch_up(tmp_path)
+
+        events = list(catch_up.events(files))
+
+        assert len(events) == 3
+        assert catch_up.offset.segment_number == 2
+        assert catch_up.offset.byte_offset > 0
+
+    def test_offset_captures_mid_file_position_on_interruption(self, tmp_path):
+        """Interrupting mid-file records the in-progress byte offset, not 0."""
+        files = self._segments(tmp_path, [{"x": 1}, {"x": 2}, {"x": 3}])
+        catch_up = self._catch_up(tmp_path)
+
+        collected = []
+        gen = catch_up.events(files)
+        for event in gen:
+            collected.append(event)
+            if len(collected) == 1:
+                gen.close()  # GeneratorExit mid-file, like a SIGTERM teardown
+                break
+
+        assert catch_up.offset.segment_number == 1
+        assert catch_up.offset.byte_offset > 0
+
+    def test_no_files_resets_non_zero_offset(self, tmp_path):
+        """Zero matches with a stale non-zero offset resets to (0, 0)."""
+        from brooklet.core.types import GlobOffset
+
+        catch_up = self._catch_up(tmp_path, offset=GlobOffset(3, 42))
+
+        assert list(catch_up.events([])) == []
+        assert catch_up.offset == GlobOffset(0, 0)
+
+    def test_follow_seeds_file_positions_for_skipped_and_read(self, tmp_path):
+        """Follow mode records end positions for both skipped and read files."""
+        from brooklet.core.types import GlobOffset
+
+        files = self._segments(tmp_path, [{"x": 1}], [{"y": 1}])
+        positions: dict[str, int] = {}
+        catch_up = self._catch_up(
+            tmp_path,
+            follow=True,
+            offset=GlobOffset(2, 0),  # skip segment 1, read segment 2
+            file_positions=positions,
+        )
+
+        list(catch_up.events(files))
+
+        assert positions[files[0]] > 0  # skipped file's size recorded
+        assert positions[files[1]] > 0  # read file's end position recorded
+
+
+class TestSingleFileReaderUnit:
+    """Directly exercises the extracted `_SingleFileReader` in isolation.
+
+    These pin the unit's public contract — `events()` iteration, the `offset`
+    reached so far, and the `file_handle` snapshot used by `Consumer.close()` —
+    independent of the `Consumer` that drives it, mirroring `TestGlobCatchUpUnit`.
+    """
+
+    def _reader(self, path, **kwargs):
+        """Build a `_SingleFileReader` borrowing a real Consumer's `_read_lines`."""
+        from brooklet.core.consumer import Consumer, _SingleFileReader
+        from brooklet.core.types import SingleFileOffset
+
+        consumer = Consumer(
+            path=str(path),
+            mode="single-file",
+            group="g",
+            topic="t",
+            offsets_dir=str(path.parent / "offsets"),
+        )
+        return _SingleFileReader(
+            path=path,
+            offset=kwargs.get("offset", SingleFileOffset(byte_offset=0)),
+            follow=False,
+            read_lines=consumer._read_lines,
+            observe=consumer._observe,
+            is_closed=lambda: True,
+        )
+
+    def test_full_read_advances_offset_to_eof(self, tmp_path):
+        """Reading the whole file leaves the offset at EOF (byte>0)."""
+        path = tmp_path / "data.jsonl"
+        path.write_text(json.dumps({"x": 1}) + "\n" + json.dumps({"x": 2}) + "\n")
+        reader = self._reader(path)
+
+        events = list(reader.events())
+
+        assert len(events) == 2
+        assert reader.offset.byte_offset > 0
+        assert reader.file_handle is None  # cleared after teardown
+
+    def test_offset_captures_mid_file_position_on_interruption(self, tmp_path):
+        """Interrupting mid-file records the in-progress byte offset, not 0."""
+        path = tmp_path / "data.jsonl"
+        path.write_text(
+            json.dumps({"x": 1}) + "\n" + json.dumps({"x": 2}) + "\n" + json.dumps({"x": 3}) + "\n"
+        )
+        reader = self._reader(path)
+
+        collected = []
+        gen = reader.events()
+        for event in gen:
+            collected.append(event)
+            if len(collected) == 1:
+                gen.close()  # GeneratorExit mid-file, like a SIGTERM teardown
+                break
+
+        assert reader.offset.byte_offset > 0
+        assert reader.file_handle is None

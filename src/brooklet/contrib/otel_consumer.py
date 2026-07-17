@@ -6,7 +6,7 @@ from __future__ import annotations
 import glob as glob_module
 import json
 import logging
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated
@@ -15,6 +15,7 @@ import typer
 
 import brooklet
 from brooklet.cli.plugins import hookimpl
+from brooklet.contrib.cli_options import StreamDirOptionFollowOnly
 
 _logger = logging.getLogger("brooklet.contrib.otel")
 
@@ -156,6 +157,56 @@ def _iter_jsonl(filepath: str) -> Iterator[dict]:
         )
 
 
+def _scan(
+    harness_dir: str,
+    kind: str,
+    topic: str,
+    parser: Callable[[dict], dict | None],
+    stream_dir: str | None,
+    follow: bool,
+    group: str,
+) -> Iterator[dict]:
+    """Yield parsed events from Vector's JSONL output for a single signal kind.
+
+    Shared implementation behind scan_traces/scan_metrics/scan_logs. In batch
+    mode reads {harness_dir}/{kind}/*.jsonl directly; in follow mode uses
+    brooklet's consumer for offset tracking and tailing.
+
+    Args:
+        harness_dir: Base directory containing the {kind}/ subdir.
+        kind: Signal subdirectory name (traces/metrics/logs).
+        topic: Brooklet topic name for follow-mode registration.
+        parser: Pure parse_*_event function applied to each raw event.
+        stream_dir: Directory for brooklet offset state (follow mode only).
+        follow: If True, tail for new events via brooklet consumer.
+        group: Consumer group name for offset tracking.
+    """
+    harness_path = Path(harness_dir).resolve()
+    kind_glob = str(harness_path / kind / "*.jsonl")
+
+    if follow:
+        _stream = brooklet.open(stream_dir or str(harness_path))
+        _stream.register(topic, kind_glob, "glob")
+        with _stream.consume(topic, group=group, follow=True) as consumer:
+            for event in consumer:
+                parsed = parser(event)
+                if parsed is not None:
+                    yield parsed
+    else:
+        kind_dir = harness_path / kind
+        if not kind_dir.exists():
+            _logger.warning(
+                f"otel_consumer: {kind} directory not found",
+                extra={"path": str(kind_dir), "kind": kind},
+            )
+            return
+        for filepath in sorted(glob_module.glob(kind_glob)):
+            for event in _iter_jsonl(filepath):
+                parsed = parser(event)
+                if parsed is not None:
+                    yield parsed
+
+
 def scan_traces(
     harness_dir: str,
     stream_dir: str | None = None,
@@ -173,29 +224,9 @@ def scan_traces(
         follow: If True, tail for new spans via brooklet consumer.
         group: Consumer group name for offset tracking.
     """
-    harness_path = Path(harness_dir).resolve()
-    traces_glob = str(harness_path / "traces" / "*.jsonl")
-
-    if follow:
-        _stream = brooklet.open(stream_dir or str(harness_path))
-        _stream.register("otel/traces", traces_glob, "glob")
-        with _stream.consume("otel/traces", group=group, follow=True) as consumer:
-            for event in consumer:
-                parsed = parse_trace_event(event)
-                if parsed is not None:
-                    yield parsed
-    else:
-        traces_dir = harness_path / "traces"
-        if not traces_dir.exists():
-            _logger.warning(
-                "otel_consumer: traces directory not found", extra={"path": str(traces_dir)}
-            )
-            return
-        for filepath in sorted(glob_module.glob(traces_glob)):
-            for event in _iter_jsonl(filepath):
-                parsed = parse_trace_event(event)
-                if parsed is not None:
-                    yield parsed
+    yield from _scan(
+        harness_dir, "traces", "otel/traces", parse_trace_event, stream_dir, follow, group
+    )
 
 
 def scan_metrics(
@@ -215,29 +246,9 @@ def scan_metrics(
         follow: If True, tail for new metrics via brooklet consumer.
         group: Consumer group name for offset tracking.
     """
-    harness_path = Path(harness_dir).resolve()
-    metrics_glob = str(harness_path / "metrics" / "*.jsonl")
-
-    if follow:
-        _stream = brooklet.open(stream_dir or str(harness_path))
-        _stream.register("otel/metrics", metrics_glob, "glob")
-        with _stream.consume("otel/metrics", group=group, follow=True) as consumer:
-            for event in consumer:
-                parsed = parse_metric_event(event)
-                if parsed is not None:
-                    yield parsed
-    else:
-        metrics_dir = harness_path / "metrics"
-        if not metrics_dir.exists():
-            _logger.warning(
-                "otel_consumer: metrics directory not found", extra={"path": str(metrics_dir)}
-            )
-            return
-        for filepath in sorted(glob_module.glob(metrics_glob)):
-            for event in _iter_jsonl(filepath):
-                parsed = parse_metric_event(event)
-                if parsed is not None:
-                    yield parsed
+    yield from _scan(
+        harness_dir, "metrics", "otel/metrics", parse_metric_event, stream_dir, follow, group
+    )
 
 
 def scan_logs(
@@ -257,29 +268,9 @@ def scan_logs(
         follow: If True, tail for new log records via brooklet consumer.
         group: Consumer group name for offset tracking.
     """
-    harness_path = Path(harness_dir).resolve()
-    logs_glob = str(harness_path / "logs" / "*.jsonl")
-
-    if follow:
-        _stream = brooklet.open(stream_dir or str(harness_path))
-        _stream.register("otel/logs", logs_glob, "glob")
-        with _stream.consume("otel/logs", group=group, follow=True) as consumer:
-            for event in consumer:
-                parsed = parse_log_event(event)
-                if parsed is not None:
-                    yield parsed
-    else:
-        logs_dir = harness_path / "logs"
-        if not logs_dir.exists():
-            _logger.warning(
-                "otel_consumer: logs directory not found", extra={"path": str(logs_dir)}
-            )
-            return
-        for filepath in sorted(glob_module.glob(logs_glob)):
-            for event in _iter_jsonl(filepath):
-                parsed = parse_log_event(event)
-                if parsed is not None:
-                    yield parsed
+    yield from _scan(
+        harness_dir, "logs", "otel/logs", parse_log_event, stream_dir, follow, group
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -323,10 +314,7 @@ class OtelPlugin:
             ],
             follow: Annotated[bool, typer.Option(help="Tail for new spans")] = False,
             group: Annotated[str, typer.Option(help="Consumer group name")] = "otel",
-            stream_dir: Annotated[
-                Path | None,
-                typer.Option("--stream-dir", envvar="BROOKLET_DIR", help="Brooklet stream dir"),
-            ] = None,
+            stream_dir: StreamDirOptionFollowOnly = None,
         ) -> None:
             """Show OTLP trace spans from Vector JSONL output."""
             for span in scan_traces(
@@ -341,10 +329,7 @@ class OtelPlugin:
             ],
             follow: Annotated[bool, typer.Option(help="Tail for new metrics")] = False,
             group: Annotated[str, typer.Option(help="Consumer group name")] = "otel",
-            stream_dir: Annotated[
-                Path | None,
-                typer.Option("--stream-dir", envvar="BROOKLET_DIR", help="Brooklet stream dir"),
-            ] = None,
+            stream_dir: StreamDirOptionFollowOnly = None,
         ) -> None:
             """Show OTLP metrics from Vector JSONL output."""
             for m in scan_metrics(
@@ -359,10 +344,7 @@ class OtelPlugin:
             ],
             follow: Annotated[bool, typer.Option(help="Tail for new log records")] = False,
             group: Annotated[str, typer.Option(help="Consumer group name")] = "otel",
-            stream_dir: Annotated[
-                Path | None,
-                typer.Option("--stream-dir", envvar="BROOKLET_DIR", help="Brooklet stream dir"),
-            ] = None,
+            stream_dir: StreamDirOptionFollowOnly = None,
         ) -> None:
             """Show OTLP log records from Vector JSONL output."""
             for log in scan_logs(
