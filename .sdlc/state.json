@@ -1,10 +1,10 @@
 {
   "feature": "architecture-debt-refactor",
   "request": "Refactor brooklet's core/consumer.py Consumer god-object into per-mode strategy classes (single-file batch, single-file follow, glob batch, glob+follow) sharing a common offset-persistence mixin, so interrupt-safe offset saving isn't reimplemented per mode. Extract a shared contrib adapter framework that claude_analytics.py, pytest_analytics.py, and otel_consumer.py build on instead of duplicating the 3-layer (parsing -> consumer integration -> CLI plugin) pattern by convention only. Have claude_analytics.scan_sessions reuse Consumer's existing glob+follow mode instead of hand-rolling its own mtime-polling follow loop. Reduce complexity in contrib/otel_consumer.py's parsing functions.",
-  "state": "SHIP",
+  "state": "DONE",
   "cycle": 1,
   "driver": "auto",
-  "iteration": 9,
+  "iteration": 10,
   "budgets": {
     "max_iterations": 50,
     "max_attempts_per_task": 3,
@@ -34,7 +34,7 @@
     ],
     "mode": "block"
   },
-  "last_progress_iteration": 9,
+  "last_progress_iteration": 10,
   "history": [
     {
       "at": "2026-07-07T14:23:04+00:00",
@@ -86,8 +86,13 @@
       "at": "2026-07-07T15:53:39+00:00",
       "to": "SHIP",
       "reason": "review gate clean after 2 fix round-trips + 1 trivial doc correction; 472 tests pass, 100% coverage on all touched files, ruff clean"
+    },
+    {
+      "at": "2026-08-09T02:07:22+00:00",
+      "to": "DONE",
+      "reason": "SHIP completed on 2026-07-07: PR #19 was created and has since been merged into main as b8b5730. The loop was left in SHIP without recording its terminal transition; verified merged and closing. Task tracking for this project has since moved from beads to Forge issues."
     }
   ],
   "started": "2026-07-07T14:23:04+00:00",
-  "updated": "2026-07-07T15:55:07+00:00"
+  "updated": "2026-08-09T02:07:22+00:00"
 }
