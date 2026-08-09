@@ -127,6 +127,11 @@ TodoWrite, or markdown checklists to track work in this repository — for this
 project that guidance is superseded. `.beads/` is kept only as a read-only
 archive of historical issues; do not create or update issues in it.
 
+All 43 active beads issues were triaged against the code before the move: 14 were
+carried forward, 3 were already done, and 25 were discarded. The full mapping and
+the reasoning for each discard is in `docs/forge/beads-migration.md` — read that
+before wondering where an old `brooklet-xxx` id went.
+
 ```bash
 python3 scripts/forge_issue.py list                      # open work
 python3 scripts/forge_issue.py list --state all
