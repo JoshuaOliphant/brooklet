@@ -214,11 +214,30 @@ does know: `publish.yml` now also lists `workflow_dispatch`, which GitHub treats
 as a harmless added manual trigger. Keep that in mind before adding any
 release-triggered workflow.
 
-Forge's `container` runner **cannot run this project's tests today**. Its image
-ships no Python interpreter, and its egress allowlist has no `pypi.org`,
-`files.pythonhosted.org` or `astral.sh`, with no per-workflow way to add one. It
-also rejects `uses:` steps and never injects Action secrets. So porting the
-Python suite to Forge CI is blocked upstream, not merely unfinished.
+The `container` runner is genuinely real — Forge's own repo (`swyx/forge`) runs
+its CI on it, with jobs taking one to three minutes and `npm ci` alone taking
+~28s. Our workflows get the fake runner purely because they never declare
+`runner: container`.
+
+But opting in would not help brooklet yet, because the container is Node-shaped:
+
+- `packages/runner/Dockerfile` pins `docker.io/cloudflare/sandbox:0.12.3`, the
+  **default** image variant, which ships no Python interpreter. Upstream also
+  builds a `python` variant (CPython 3.11.14), which Forge does not use — and
+  3.11 is below this project's 3.12 floor anyway.
+- `RUNNER_ALLOWED_HOSTS` contains no `pypi.org`, `files.pythonhosted.org` or
+  `astral.sh`, and there is no per-workflow field to add a host. `github.com` *is*
+  allowed, so bootstrapping an interpreter might work, but `uv sync` still cannot
+  reach the package index.
+
+Container jobs also reject `uses:` steps and never receive Action secrets. So
+Python CI on Forge waits on two small upstream changes (a different image tag and
+a wider egress allowlist), not on anything in this repository.
+
+Be aware Forge's own workflows are written against GitHub semantics Forge does
+not fully implement: `ci.yml` uses `branches-ignore`, which Forge does not parse,
+so it fires on every branch, and `git-ingest-contracts.yml` uses `push.paths`,
+which Forge parses and ignores.
 
 The Forge **Wiki** is unavailable to this account: it sits behind a beta
 allowlist and every wiki endpoint returns 403 "Forge Wiki is not enabled for
