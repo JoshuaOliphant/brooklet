@@ -1,0 +1,39 @@
+sf actions cancel
+sf actions inspect
+sf actions list
+sf auth git-credential
+sf auth login
+sf auth logout
+sf auth revoke
+sf auth status
+sf clone-url
+sf commands
+sf deploy check
+sf deploy list
+sf deploy promote
+sf deploy retry
+sf deploy rollback
+sf deploy status
+sf diagnose
+sf docs generate
+sf gist import
+sf git doctor
+sf help
+sf hooks install
+sf hooks status
+sf llms
+sf migrate
+sf operator status
+sf register
+sf repo create
+sf repo get
+sf repo import
+sf repo list
+sf repo star
+sf repo unstar
+sf repo update
+sf schema
+sf scopes
+sf status
+sf transcript upload
+sf whoami
