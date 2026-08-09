@@ -1,5 +1,13 @@
 # Beads - AI-Native Issue Tracking
 
+> **Retired in this repository.** brooklet tracks work as Forge issues on
+> https://forge.smol.ai/joshua-oliphant/brooklet, driven by
+> `scripts/forge_issue.py`. See the "Task Tracking" section of `CLAUDE.md`.
+>
+> This directory is kept as a read-only archive of historical issues. Do not
+> create or update issues here, and disregard the instructions below — they
+> describe the tracker this project no longer uses.
+
 Welcome to Beads! This repository uses **Beads** for issue tracking - a modern, AI-native tool designed to live directly in your codebase alongside your code.
 
 ## What is Beads?
