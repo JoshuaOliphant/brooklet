@@ -67,25 +67,32 @@ def transcripts_enabled(repo: Path) -> bool:
     return run_git(["config", "--bool", "--get", "forge.transcripts.enabled"], repo) == "true"
 
 
-def resolve_repo_slug(repo: Path) -> str | None:
-    """Return "<owner>/<name>" for the Forge repository.
-
-    Prefers an explicit `forge.repo` config value, then the `forge` remote. The
-    `origin` remote is deliberately not consulted: this project keeps GitHub on
-    `origin` and Forge on a separate remote, so guessing from `origin` would
-    address the wrong host.
-    """
-    configured = run_git(["config", "--get", "forge.repo"], repo)
-    if configured:
-        return configured.strip("/")
-
-    url = run_git(["remote", "get-url", "forge"], repo)
-    if not url or "forge.smol.ai" not in url:
+def slug_from_url(url: str) -> str | None:
+    """Return "<owner>/<name>" when a remote URL points at Forge."""
+    if "forge.smol.ai" not in url:
         return None
     slug = url.split("forge.smol.ai", 1)[1].lstrip(":/")
     if slug.endswith(".git"):
         slug = slug[: -len(".git")]
     return slug.strip("/") or None
+
+
+def resolve_repo_slug(repo: Path) -> str | None:
+    """Return "<owner>/<name>" for the Forge repository.
+
+    Prefers an explicit `forge.repo` config value, then any remote whose URL
+    points at Forge. Remotes are matched by URL rather than by name, since which
+    remote holds Forge is a local naming choice.
+    """
+    configured = run_git(["config", "--get", "forge.repo"], repo)
+    if configured:
+        return configured.strip("/")
+
+    for remote in run_git(["remote"], repo).splitlines():
+        slug = slug_from_url(run_git(["remote", "get-url", remote.strip()], repo))
+        if slug:
+            return slug
+    return None
 
 
 def read_token(slug: str) -> str | None:

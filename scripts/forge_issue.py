@@ -38,19 +38,25 @@ def git(args: list[str]) -> str:
     return out.stdout.strip() if out.returncode == 0 else ""
 
 
+def slug_from_url(url: str) -> str | None:
+    if "forge.smol.ai" not in url:
+        return None
+    slug = url.split("forge.smol.ai", 1)[1].lstrip(":/")
+    if slug.endswith(".git"):
+        slug = slug[: -len(".git")]
+    return slug.strip("/") or None
+
+
 def repo_slug() -> str:
     configured = git(["config", "--get", "forge.repo"])
     if configured:
         return configured.strip("/")
-    url = git(["remote", "get-url", "forge"])
-    if url and "forge.smol.ai" in url:
-        slug = url.split("forge.smol.ai", 1)[1].lstrip(":/")
-        if slug.endswith(".git"):
-            slug = slug[: -len(".git")]
-        return slug.strip("/")
-    raise SystemExit(
-        "No Forge repo configured. Run: git config forge.repo <owner>/<name>"
-    )
+    # Any remote pointing at Forge will do; the remote's name is not meaningful.
+    for remote in git(["remote"]).splitlines():
+        slug = slug_from_url(git(["remote", "get-url", remote.strip()]))
+        if slug:
+            return slug
+    raise SystemExit("No Forge repo configured. Run: git config forge.repo <owner>/<name>")
 
 
 def token(slug: str) -> str:

@@ -157,16 +157,28 @@ git config forge.repo joshua-oliphant/brooklet    # tells them which repo to use
 
 ## Forge Platform Notes
 
-`origin` is GitHub; `forge` is SmolForge. Pushes to Forge are explicit:
-`git push forge main`.
+**Forge is the primary remote.** `origin` points at
+https://forge.smol.ai/joshua-oliphant/brooklet.git; `github` is the backup
+mirror. Because `sf` infers the repository from `origin`, this arrangement also
+makes bare `sf` commands work without an explicit repository argument.
+
+Keep the two in sync — push both:
+
+```bash
+git push origin main     # Forge (primary)
+git push github main     # GitHub (backup mirror)
+```
+
+Mirroring is manual for now. Automating it as a Forge action has to wait until
+Forge Actions actually execute steps rather than simulating them (see below);
+until then a Forge-side sync job would report success without pushing anything.
 
 Two sharp edges worth knowing:
 
-- `sf` infers the repository from `origin`, and some `sf` commands **rewrite
-  `origin` to the Forge URL as a side effect** (`sf auth git-credential` and
-  `sf git doctor` both do). Always pass the repository explicitly —
-  `sf actions list joshua-oliphant/brooklet` — and check `git remote -v`
-  afterwards.
+- Forge creates **server-side commits on `main`** without being asked. It added
+  an "Add MIT license" commit that rewrote the existing `LICENSE`, replacing the
+  copyright holder with the Forge username. Check `git log origin/main` after
+  the first push and reconcile before assuming the hosts match.
 - Forge executes the GitHub workflow files in `.github/workflows/` on its own
   `worker` runner, which **simulates** steps rather than running them: every
   step reports success in under a second. It also ignores `on:` trigger filters
@@ -208,5 +220,5 @@ When ending a work session, complete ALL steps:
 1. Run quality gates (tests, linters) if code changed
 2. Commit all changes
 3. Push to both remotes — work is NOT complete until `git push origin <branch>`
-   (GitHub) succeeds. Mirror to Forge with `git push forge <branch>`.
+   (Forge, primary) succeeds. Mirror to the backup with `git push github <branch>`.
 4. Provide context for next session
