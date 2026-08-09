@@ -268,9 +268,7 @@ def scan_logs(
         follow: If True, tail for new log records via brooklet consumer.
         group: Consumer group name for offset tracking.
     """
-    yield from _scan(
-        harness_dir, "logs", "otel/logs", parse_log_event, stream_dir, follow, group
-    )
+    yield from _scan(harness_dir, "logs", "otel/logs", parse_log_event, stream_dir, follow, group)
 
 
 # ---------------------------------------------------------------------------
