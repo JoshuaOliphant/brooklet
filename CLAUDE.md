@@ -179,11 +179,49 @@ Two sharp edges worth knowing:
   an "Add MIT license" commit that rewrote the existing `LICENSE`, replacing the
   copyright holder with the Forge username. Check `git log origin/main` after
   the first push and reconcile before assuming the hosts match.
-- Forge executes the GitHub workflow files in `.github/workflows/` on its own
-  `worker` runner, which **simulates** steps rather than running them: every
-  step reports success in under a second. It also ignores `on:` trigger filters
-  and `strategy.matrix`. Treat a green Forge Actions run as no evidence that
-  anything ran; GitHub Actions remains the real CI.
+- Forge reads workflows from `.github/workflows/` — the same directory GitHub
+  uses — and honours its own extra keys there. Definitions are only re-read on a
+  push to the **default branch**, though existing definitions fire on a push to
+  any branch.
+
+### Forge Actions: what actually runs
+
+`runner` accepts exactly `worker` and `container`, and **`worker` is the
+default**. The `worker` runner *simulates* steps: it never executes your
+commands, string-matches them to emit canned output, and fails randomly about
+10% of the time. That is why an `uv sync` and a 478-test suite each "passed" in
+under a second, and why a docs-only push once reported `publish` as failed.
+**A green Forge Actions run on the default runner is not evidence that anything
+ran.** GitHub Actions remains the real CI.
+
+Forge silently drops `strategy`/`matrix`, `env`, `if`, `timeout-minutes` and
+`runs-on`, which is why a two-version matrix collapses to one job. Of the
+trigger events it only recognises `push`, `pull_request`, `workflow_dispatch`
+and `schedule` — and `schedule` is limited to an operator allowlist, so cron
+never fires here. `push.branches` works; `push.paths` is parsed and then
+ignored; `branches-ignore` is not parsed at all, which makes it *worse* than
+omitting it.
+
+**`release` is not a recognised event.** A workflow whose events Forge
+recognises none of falls back to push-on-default-branch — which is exactly why
+`publish.yml` ran on every push to main. The fix is to declare an event Forge
+does know: `publish.yml` now also lists `workflow_dispatch`, which GitHub treats
+as a harmless added manual trigger. Keep that in mind before adding any
+release-triggered workflow.
+
+Forge's `container` runner **cannot run this project's tests today**. Its image
+ships no Python interpreter, and its egress allowlist has no `pypi.org`,
+`files.pythonhosted.org` or `astral.sh`, with no per-workflow way to add one. It
+also rejects `uses:` steps and never injects Action secrets. So porting the
+Python suite to Forge CI is blocked upstream, not merely unfinished.
+
+The Forge **Wiki** is unavailable to this account: it sits behind a beta
+allowlist and every wiki endpoint returns 403 "Forge Wiki is not enabled for
+this account". When access is granted, one call both enables and builds it —
+`POST /api/repos/:owner/:repo/wiki/builds` — and generation is host-funded, so
+it costs the account nothing and needs no model credential. Wiki pages are
+model-derived from the source, never hand-authored; the only way to steer them
+is a committed `.forge/wiki.json`.
 
 Forge is alpha and changes often. Check for platform drift with:
 
