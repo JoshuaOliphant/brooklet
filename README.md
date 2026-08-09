@@ -15,6 +15,8 @@ uv tool install brooklet    # as a global CLI tool
 pip install brooklet        # or with pip
 ```
 
+Requires Python 3.12 or newer.
+
 ## Quickstart
 
 ```python
@@ -50,8 +52,11 @@ for event in consumer:
 ### Glob mode (multiple files)
 
 ```python
-# Register a glob pattern — all matching files are consumed in sorted order
-stream.register("sessions", path="~/.claude/projects/*/*.jsonl", mode="glob")
+import os
+
+# Register a glob pattern — all matching files are consumed in sorted order.
+# Glob patterns are matched verbatim, so expand `~` yourself.
+stream.register("sessions", path=os.path.expanduser("~/.claude/projects/*/*.jsonl"), mode="glob")
 for event in stream.consume("sessions", group="analytics"):
     print(event["_seq"], event.get("type"))
 
@@ -78,7 +83,7 @@ Every event gets thin metadata auto-injected:
 | Field | Description | Behavior |
 |-------|-------------|----------|
 | `_ts` | ISO 8601 timestamp | Set if missing, preserved if present |
-| `_seq` | Topic-monotonic sequence number | Assigned at produce time, preserved on read |
+| `_seq` | Topic-monotonic sequence number | Assigned at produce time, preserved on read; lines from external sources that carry none get a monotonic fallback |
 | `_src` | Producer identifier | Set from `source` param or topic name |
 
 The `_` prefix avoids collisions with any producer's payload.
@@ -102,9 +107,11 @@ echo '{"type":"hello"}' | brooklet produce my-topic --stream-dir ./streams
 brooklet consume my-topic --group reader --stream-dir ./streams | jq '.'
 brooklet watch my-topic --group watcher --stream-dir ./streams    # compact line-per-event tailing for Claude Code Monitor
 brooklet cat my-topic --stream-dir ./streams                      # read-only, no offset tracking
-brooklet register sessions "~/.claude/projects/*/*.jsonl" --mode glob --stream-dir ./streams
+brooklet register sessions "$HOME/.claude/projects/*/*.jsonl" --mode glob --stream-dir ./streams
 brooklet topics --stream-dir ./streams --json
 ```
+
+Glob patterns are stored verbatim and matched later, so `~` is not expanded — write `$HOME` inside double quotes, which lets the shell substitute the home directory while leaving the `*` wildcards for brooklet.
 
 Set `BROOKLET_DIR` to avoid repeating `--stream-dir`:
 
@@ -171,13 +178,15 @@ Same group name, different process, zero replay. The `#N` prefix is the topic-mo
 
 ### Plugin system
 
-Brooklet uses [pluggy](https://pluggy.readthedocs.io/) for plugin discovery. Built-in plugins (`scout`, `pytest`) and third-party plugins use the same interface. Third-party packages register via entry points:
+Brooklet uses [pluggy](https://pluggy.readthedocs.io/) for plugin discovery. Built-in plugins (`scout`, `pytest`, `otel`) and third-party plugins use the same interface. Third-party packages register via entry points:
 
 ```toml
 # In your package's pyproject.toml
 [project.entry-points.brooklet]
-my-plugin = "my_package:MyPlugin"
+my-plugin = "my_package.plugin"
 ```
+
+The entry point must resolve to something pluggy can register directly: a module holding `@hookimpl` functions, or a module-level plugin instance. Pointing it at a class leaves the hook methods unbound, so the `brooklet_commands` call fails.
 
 ### Scout (Claude Code analytics)
 
@@ -225,13 +234,13 @@ pytest --report-log=test-results.jsonl
 Consumes [Vector](https://vector.dev/) JSONL output from an OTLP pipeline — traces, metrics, and log records:
 
 ```bash
-# Show all spans emitted today
+# Show every span in the harness's trace files
 brooklet otel traces .claude/harness/observability/data/jsonl
 # produce  1.2ms  ROOT  ok  brooklet.topic=events
 # produce  0.4ms  0a1c7335  ok  brooklet.topic=events
 # test-span  2.0ms  ROOT  ok  test.purpose=format-discovery
 
-# Show current metric values
+# Show every recorded metric datapoint
 brooklet otel metrics .claude/harness/observability/data/jsonl
 # brooklet.events_produced  42.0  [counter/incremental]
 # brooklet.events_consumed  15.0  [counter/incremental]
@@ -240,7 +249,7 @@ brooklet otel metrics .claude/harness/observability/data/jsonl
 brooklet otel logs .claude/harness/observability/data/jsonl --follow --group agent
 ```
 
-The argument is the base directory containing `traces/`, `metrics/`, and `logs/` subdirectories — the layout Vector produces when writing OTLP data to daily-rotating JSONL files.
+The argument is the base directory containing `traces/`, `metrics/`, and `logs/` subdirectories — the layout Vector produces when writing OTLP data to daily-rotating JSONL files. Without `--follow` these commands read every daily file from the top and track no offset, so pipe them through `tail`, `grep`, or `head` once the harness has been running a while.
 
 This is the primary dog-food use case for brooklet: the observability harness writes JSONL via Vector's file sink, and brooklet consumes it with offset tracking. Unlike `curl | jq` against VictoriaLogs, the `--follow` + `--group` flags give you gapless resume across agent sessions.
 
@@ -331,6 +340,7 @@ brooklet consume git/log --group other --stream-dir ./demo | wc -l   # → 20
 | `stream.register(name, path, mode)` | Map external JSONL to a topic name |
 | `stream.consume(topic, group, follow)` | Read events with offset tracking |
 | `stream.produce(topic, event, source)` | Write events to a local topic |
+| `stream.read(topic)` | Re-read every event without advancing any offset |
 | `stream.topics()` | List all registered topics |
 
 ## Changelog

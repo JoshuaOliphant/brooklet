@@ -83,6 +83,28 @@ def aggregate_run(run_id: str, events: list[dict]) -> RunStats
 
 ### Layer 2: Consumer Integration (uses brooklet API)
 
+> **Superseded — what shipped differs from this section.** Three parts of the
+> design below were changed during implementation; the notes are here so this
+> spec is not read as a description of current behavior.
+>
+> - **Batch mode bypasses brooklet entirely.** `scan_runs()` only opens a stream
+>   and consumes when `follow=True`. With `follow=False` — the default, and what
+>   `brooklet pytest scan <path>` runs — it reads the JSONL files directly via a
+>   private helper and tracks no offsets, so every invocation sees all results
+>   (commit `1e72f88`, which fixed "No runs processed." on a second run of the
+>   same command). This also means AC-4 below no longer describes the default
+>   path; offset tracking is exercised only under `--follow`.
+> - **Follow-mode topics are derived per path,** as `pytest/<sha256(abspath)[:8]>`,
+>   rather than the static `pytest/results` / `pytest/history` names in AC-1 and
+>   AC-2. The hash keeps two different report logs from colliding on one offset
+>   file in a shared stream directory.
+> - **Glob mode groups by file path, not by `_src`.** It iterates the sorted glob
+>   matches and treats each file as its own run.
+>
+> The standalone `brooklet-pytest` entry point named under Layer 3 was likewise
+> replaced by the unified Typer CLI's `brooklet pytest scan` — see
+> `docs/superpowers/plans/2026-03-22-typer-cli.md`.
+
 ```python
 def scan_runs(
     path: str,

@@ -11,10 +11,10 @@ This is an executable document. Run `showboat verify docs/demos/watch-gapless-re
 
 ## Setup: fresh scratch stream
 
-We start with an empty scratch directory and seed two events into a topic called `demo`.
+We start with an empty scratch directory and seed two events into a topic called `demo`. A local topic's events land in numbered segment files (`data-NNNN.jsonl`), starting at `data-0001.jsonl`.
 
 ```bash
-rm -rf /tmp/brooklet-watch-demo && mkdir /tmp/brooklet-watch-demo && cd /tmp/brooklet-watch-demo && BROOKLET=/Users/joshuaoliphant/Library/CloudStorage/Dropbox/python_workspace/brooklet/.venv/bin/brooklet && echo '{"_ts":"2026-01-01T10:00:00Z","n":1,"msg":"first"}'  | $BROOKLET produce demo && echo '{"_ts":"2026-01-01T10:00:01Z","n":2,"msg":"second"}' | $BROOKLET produce demo && cat demo/data.jsonl
+rm -rf /tmp/brooklet-watch-demo && mkdir /tmp/brooklet-watch-demo && cd /tmp/brooklet-watch-demo && BROOKLET=/Users/joshuaoliphant/Library/CloudStorage/Dropbox/python_workspace/brooklet/.venv/bin/brooklet && echo '{"_ts":"2026-01-01T10:00:00Z","n":1,"msg":"first"}'  | $BROOKLET produce demo && echo '{"_ts":"2026-01-01T10:00:01Z","n":2,"msg":"second"}' | $BROOKLET produce demo && cat demo/data-0001.jsonl
 ```
 
 ```output
@@ -48,18 +48,18 @@ p.wait(timeout=5)
 This is where the demo diverges from `tail -f`. We now produce two more events after stopping the watcher. A plain tail-based approach would either miss these entirely (start-from-current-end) or replay the earlier ones too (start-from-beginning). Brooklet's byte-offset tracking does exactly what you want: skip what the watcher already saw, deliver only what is new.
 
 ```bash
-cd /tmp/brooklet-watch-demo && BROOKLET=/Users/joshuaoliphant/Library/CloudStorage/Dropbox/python_workspace/brooklet/.venv/bin/brooklet && echo '{"_ts":"2026-01-01T10:00:02Z","n":3,"msg":"during gap"}' | $BROOKLET produce demo && echo '{"_ts":"2026-01-01T10:00:03Z","n":4,"msg":"still gap"}' | $BROOKLET produce demo && wc -l demo/data.jsonl
+cd /tmp/brooklet-watch-demo && BROOKLET=/Users/joshuaoliphant/Library/CloudStorage/Dropbox/python_workspace/brooklet/.venv/bin/brooklet && echo '{"_ts":"2026-01-01T10:00:02Z","n":3,"msg":"during gap"}' | $BROOKLET produce demo && echo '{"_ts":"2026-01-01T10:00:03Z","n":4,"msg":"still gap"}' | $BROOKLET produce demo && wc -l demo/data-0001.jsonl
 ```
 
 ```output
-       4 demo/data.jsonl
+       4 demo/data-0001.jsonl
 ```
 
 ## Second watch run: resume from saved offset
 
 Restart `brooklet watch` with the **same group name** (`resumer`). The output below shows only events 3 and 4 — the two that were produced during the gap. Events 1 and 2 are not replayed because brooklet's consumer-group offset file recorded how far the first watcher got before it died.
 
-> **About the `#N` prefix:** it is a per-consumer-run counter that restarts at 1 on every Consumer instance, not a topic-wide monotonic sequence. The payload fields (`n=3`, `n=4`) are the authoritative markers showing that brooklet skipped events 1–2. See `brooklet-a2c` for a discussion of making this prefix topic-monotonic instead.
+> **About the `#N` prefix:** it is the topic-monotonic `_seq` assigned at produce time, not a per-run counter — so the second run resumes at `#3` / `#4`, the true position in the topic. The payload fields (`n=3`, `n=4`) agree, confirming that brooklet skipped events 1–2. See `brooklet-a2c` for the reasoning behind making this prefix topic-monotonic.
 
 ```python3
 import subprocess, time
@@ -74,24 +74,26 @@ p.wait(timeout=5)
 ```
 
 ```output
-#1 10:00:02 n=3 msg=during gap
-#2 10:00:03 n=4 msg=still gap
+#3 10:00:02 n=3 msg=during gap
+#4 10:00:03 n=4 msg=still gap
 ```
 
 ## The offset file: how brooklet knows where to resume
 
-Brooklet persists the consumer-group position as a byte offset into the topic's data file. Here is the saved state after the second run — a single integer representing how many bytes of `demo/data.jsonl` the `resumer` group has consumed.
+Brooklet persists the consumer-group position as a byte offset into the topic's segment files. A local topic is registered as a glob over `data-NNNN.jsonl`, so the saved state has to name a segment as well as a position inside it. Both are packed into one integer as `segment_number * 10**18 + byte_offset`.
 
 ```bash
-wc -c /tmp/brooklet-watch-demo/demo/data.jsonl && cat /tmp/brooklet-watch-demo/.brooklet/offsets/resumer-demo.json && echo
+wc -c /tmp/brooklet-watch-demo/demo/data-0001.jsonl && cat /tmp/brooklet-watch-demo/.brooklet/offsets/resumer-demo.json && echo
 ```
 
 ```output
-     278 /tmp/brooklet-watch-demo/demo/data.jsonl
-{"offset": 278}
+     278 /tmp/brooklet-watch-demo/demo/data-0001.jsonl
+{"offset": 1000000000000000278}
 ```
 
-Saved offset (**278**) equals the file size (**278**), which means the consumer is caught up to the end. Any events appended later will be delivered on the next `brooklet watch` — not earlier, not later, not twice.
+Unpacked, `1000000000000000278` is segment **1**, byte **278** — and 278 is exactly the size of `data-0001.jsonl`, so the consumer is caught up to the end. Any events appended later will be delivered on the next `brooklet watch` — not earlier, not later, not twice.
+
+The file name `resumer-demo.json` is the group and topic joined by `-`. Each field is percent-escaped first (`/` becomes `%2F`, `-` becomes `%2D`), so a path-style topic like `scout/stats` lands in a flat file and no two distinct group/topic pairs can share one offset file.
 
 ## Takeaway
 

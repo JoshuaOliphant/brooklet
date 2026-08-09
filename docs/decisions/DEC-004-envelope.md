@@ -10,7 +10,7 @@ Events flowing through brooklet need minimal metadata for coordination (timestam
 
 Auto-inject `_ts`, `_seq`, `_src` fields on both read (`wrap()`) and write (`serialize()`). Preserve existing `_ts` and `_src` via `setdefault()`. `_seq` is always set by brooklet as the canonical sequence number.
 
-> **Note ([DEC-015](DEC-015-topic-monotonic-seq.md)):** "`_seq` is always set by brooklet" now holds only at *produce* time (`serialize()` overwrites). At *read* time, `wrap()` preserves a valid persisted `_seq` (topic-monotonic) and falls back to the supplied counter only for lines lacking a valid int `_seq`. The original blanket "always set" rule is retained here as the historical record; see DEC-015 for the current model.
+> **Note ([DEC-015](DEC-015-topic-monotonic-seq.md)):** "`_seq` is always set by brooklet" holds only at *produce* time (`serialize()` overwrites). At *read* time, `wrap()` preserves a valid persisted `_seq` (topic-monotonic) and falls back to the supplied counter only for lines lacking a valid int `_seq` — validity is checked explicitly rather than via `setdefault()`, so a non-int `_seq` is treated as absent. The original blanket "always set" rule is retained here as the historical record; see DEC-015 for the current model.
 
 ## Consequences
 

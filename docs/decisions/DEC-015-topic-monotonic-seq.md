@@ -28,10 +28,13 @@ instead of regenerating one per consumer instance.
 
 - `serialize()` (produce time) remains the single point that assigns `_seq`. It
   is canonical.
-- `wrap()` (read time) preserves an existing `_seq` via `setdefault()`. The
-  `seq` argument becomes a fallback used only when a line carries no `_seq`
-  (legacy or externally-produced JSONL), so such sources degrade gracefully
-  rather than crashing.
+- `wrap()` (read time) preserves an existing `_seq`. The `seq` argument becomes
+  a fallback used only when a line carries no *usable* `_seq` — the guard is
+  stricter than `setdefault()`: preservation requires a real `int`, so a
+  persisted `_seq` that is a string, float, `None`, or `bool` violates the
+  `_seq: int` contract and is replaced by the fallback. Legacy or
+  externally-produced JSONL therefore degrades gracefully rather than crashing
+  or propagating a non-int sequence number.
 - `Consumer` no longer treats its internal counter as the source of truth; it
   is renamed `_fallback_seq` and only supplies the fallback for lines lacking a
   persisted `_seq`.
