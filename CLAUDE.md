@@ -12,7 +12,7 @@ Source layout uses three subpackages so directory names communicate intent (the 
 
 #### `core/` — primitives + main code paths
 - `core/envelope.py` — Metadata injection (_ts, _seq, _src): `wrap()` on read, `serialize()` on write, `SeqTracker` for high-water-mark fallback _seq across a topic's read
-- `core/types.py` — Shared type definitions (Mode, Event, offset dataclasses, SourceDef)
+- `core/types.py` — Shared type definitions (Mode, Event, offset dataclasses, SourceDef, EnvelopeMeta) and `BrookletWriteLockError`
 - `core/stream.py` — Orchestrator: `register()`, `produce()`, `consume()`, `read()`, `topics()`. Segment rotation + sidecar + flock
 - `core/consumer.py` — Batch and follow-mode iterators over JSONL files. `Consumer` is a thin mode-dispatcher over two internal strategy units: `_GlobCatchUp` (glob-mode catch-up, owns its own active-file/offset coordination state) and `_SingleFileReader` (single-file batch + follow/tailing, owns the open handle and running offset). Both expose an `.offset`/`.events()` shape; `Consumer._persist_offset()` is the single shared "save, report-don't-raise on OSError, save-before-assign" contract used by both teardown paths.
 
@@ -26,14 +26,16 @@ Source layout uses three subpackages so directory names communicate intent (the 
 - `storage/names.py` — `validate_safe_name()`: the path-traversal / unsafe-character guard for topic and group names (shared by registry and offsets)
 
 #### `cli/` — Typer app and plugin loading
-- `cli/app.py` — Unified CLI entry point; Typer app with core commands and plugin loading. Re-exported as `brooklet.cli:main` (the package's `__init__.py` re-exports `app`, `main`, `_watch_impl`).
+- `cli/app.py` — Unified CLI entry point; Typer app with core commands (`register`, `topics`, `produce`, `consume`, `watch`, `cat`) and plugin loading. The `brooklet` script is declared in `pyproject.toml` as `brooklet.cli.app:main`.
+- `cli/__init__.py` — Lazily exposes `app`, `main`, `_watch_impl` via `__getattr__`, so `cli.plugins` can be imported without pulling in the whole app module
 - `cli/plugins.py` — Plugin system using pluggy for CLI extensibility (`hookimpl` lives here)
 - `cli/watch_format.py` — One-line-per-event formatter for `brooklet watch`
 
 ### Contrib Adapters (3-layer pattern: parsing → consumer integration → CLI)
 - `contrib/claude_analytics.py` — Claude Code session analytics (`brooklet scout scan`)
 - `contrib/pytest_analytics.py` — pytest-reportlog test run analytics (`brooklet pytest scan`)
-- `contrib/otel.py` — Optional OpenTelemetry instrumentation (tracing + metrics); no-op without SDK
+- `contrib/otel.py` — Optional OpenTelemetry instrumentation *of brooklet itself* (tracing + metrics); no-op `_NoOpTracer`/`_NoOpMeter` without the `otel` dependency group installed
+- `contrib/otel_consumer.py` — The mirror image of `otel.py`: consumes OTLP trace/metric/log JSONL that Vector wrote, rather than emitting telemetry (`brooklet otel traces|metrics|logs`)
 - `contrib/topic_tee.py` — `tee_to_topic()`: shared passthrough sink for scan commands' `--output` mode (produce each stat to a topic, warn-not-raise on failure)
 - `contrib/cli_options.py` — Shared `--stream-dir` Typer option definitions: `StreamDirOption` for adapters with an `--output` flag (scout, pytest) and `StreamDirOptionFollowOnly` for adapters without one (otel), so adapters reference one of two definitions instead of each retyping the `Annotated[Path | None, ...]` shape
 
@@ -43,10 +45,11 @@ Source layout uses three subpackages so directory names communicate intent (the 
 - Source registration maps arbitrary external JSONL paths to topic names (DEC-007)
 - Size-based segment rotation with flock single-writer enforcement (DEC-014)
 - Thin envelope with `_ts`, `_seq`, `_src` auto-injected on both read and write (DEC-004)
+- `_seq` is topic-monotonic — assigned once at produce time, preserved on read (DEC-015)
 - watchdog for filesystem watching in follow mode (DEC-008)
 - Python 3.12+ minimum (DEC-009)
 - Path-style topic names (`scout/stats`) create nested directories
-- Config precedence: CLI flag > .brooklet.toml > BROOKLET_DIR env > user config > git root (DEC-013)
+- Stream directory resolution: `--stream-dir` flag > `BROOKLET_DIR` env > current directory
 - Full decision records at `docs/decisions/`
 
 ### Data Layout
@@ -65,8 +68,19 @@ Source layout uses three subpackages so directory names communicate intent (the 
     ├── locks/
     │   └── <topic>.lock      # flock target for single-writer
     └── offsets/
-        └── <group>-<topic>.json  # Byte offset per consumer group
+        └── <group>-<topic>.json  # {"offset": N} per (group, topic)
 ```
+
+Filenames under `.brooklet/` are flattened so path-style topics stay in one
+directory, but `seq/`+`locks/` and `offsets/` use different schemes:
+
+- `seq/` and `locks/` replace `/` with `--` (topic `scout/stats` → `scout--stats`).
+- `offsets/` percent-escapes each field before joining them with a single `-`
+  (`/` → `%2F`, `-` → `%2D`), which makes the (group, topic) → filename mapping
+  injective — reserving `-` as the delimiter is what keeps the group/topic
+  boundary unambiguous. Reads fall back to the older non-injective
+  `<group>-<topic with / → -->.json` name when no encoded file exists, so
+  existing consumers aren't rewound to zero.
 
 ## Dev Commands
 
@@ -75,13 +89,20 @@ uv run pytest -v              # Run tests
 uv run pytest -v --tb=short   # Run tests with short traceback
 uv run ruff check .           # Lint
 uv run ruff format .          # Format
+
+uv run pytest --cov=src/brooklet --cov-report=term-missing   # Coverage
 ```
+
+`contrib/otel.py` only reaches full coverage with the optional OTel SDK
+installed (`uv sync --group otel`); without that group its SDK-dependent
+branches are unexercised. Note `otel` is a dependency group, not an extra —
+`uv sync --extra otel` silently installs nothing.
 
 ## Conventions
 - All `.py` files start with 2-line `ABOUTME:` comment
 - TDD: tests first, then minimal implementation
 - Simple over clever — readability is the priority
-- Before adding new tests or fixtures, check for existing ones in `tests/conftest.py`, `tests/pytest_fixtures.py`, and `tests/scout_helpers.py` to avoid duplication
+- Before adding new tests or fixtures, check for existing ones in `tests/conftest.py`, `tests/pytest_fixtures.py`, `tests/scout_helpers.py`, and `tests/otel_helpers.py` to avoid duplication
 
 ## Non-Interactive Shell Commands
 
@@ -95,6 +116,81 @@ rm -rf directory            # NOT: rm -r directory
 ```
 
 Other commands: `apt-get -y`, `HOMEBREW_NO_AUTO_UPDATE=1 brew`, `scp -o BatchMode=yes`.
+
+## Task Tracking — Forge Issues
+
+This project tracks work as **Forge issues** on
+https://forge.smol.ai/joshua-oliphant/brooklet.
+
+Beads is retired here. Ignore any session guidance that says to use beads, `bd`,
+TodoWrite, or markdown checklists to track work in this repository — for this
+project that guidance is superseded. `.beads/` is kept only as a read-only
+archive of historical issues; do not create or update issues in it.
+
+```bash
+python3 scripts/forge_issue.py list                      # open work
+python3 scripts/forge_issue.py list --state all
+python3 scripts/forge_issue.py show 12
+python3 scripts/forge_issue.py create --title "..." --body "..." \
+    --label type:bug --label P2
+python3 scripts/forge_issue.py comment 12 --body "..."
+python3 scripts/forge_issue.py close 12 --reason "fixed in abc1234"
+python3 scripts/forge_issue.py labels
+```
+
+- Open an issue before starting non-trivial work, and cite its number in the
+  commit message.
+- Give every issue one `type:` label (`type:bug`, `type:feature`, `type:task`)
+  and one priority label (`P1`–`P4`). Forge has no separate type or priority
+  field, so labels carry that meaning.
+- Forge issues have no dependency model. When ordering matters, write it into
+  the body ("blocked by #7") rather than expecting the tracker to enforce it.
+- Issue bodies must stand alone. Cite concrete `file.py:line` references so a
+  reader with no session history can act on one.
+
+New machine setup:
+
+```bash
+sf auth git-credential joshua-oliphant/brooklet   # installs the token scripts read
+git config forge.repo joshua-oliphant/brooklet    # tells them which repo to use
+```
+
+## Forge Platform Notes
+
+`origin` is GitHub; `forge` is SmolForge. Pushes to Forge are explicit:
+`git push forge main`.
+
+Two sharp edges worth knowing:
+
+- `sf` infers the repository from `origin`, and some `sf` commands **rewrite
+  `origin` to the Forge URL as a side effect** (`sf auth git-credential` and
+  `sf git doctor` both do). Always pass the repository explicitly —
+  `sf actions list joshua-oliphant/brooklet` — and check `git remote -v`
+  afterwards.
+- Forge executes the GitHub workflow files in `.github/workflows/` on its own
+  `worker` runner, which **simulates** steps rather than running them: every
+  step reports success in under a second. It also ignores `on:` trigger filters
+  and `strategy.matrix`. Treat a green Forge Actions run as no evidence that
+  anything ran; GitHub Actions remains the real CI.
+
+Forge is alpha and changes often. Check for platform drift with:
+
+```bash
+python3 scripts/forge_check_updates.py          # diff live contract vs docs/forge/ snapshots
+python3 scripts/forge_check_updates.py --update # accept a new baseline, then commit it
+```
+
+Claude Code session transcripts can be attached to Forge commits via
+`.claude/hooks/smolforge-transcript.py`. It is **off by default**, because
+transcripts on a public Forge repository are readable without authentication.
+
+```bash
+python3 .claude/hooks/smolforge-transcript.py --dry-run   # inspect what would be sent
+git config --bool forge.transcripts.enabled true          # opt in
+```
+
+Only human-readable `text` blocks are published; internal reasoning and tool
+output are excluded, because tool output routinely contains file contents.
 
 ## Harness Engineering
 
@@ -111,5 +207,6 @@ When ending a work session, complete ALL steps:
 
 1. Run quality gates (tests, linters) if code changed
 2. Commit all changes
-3. Push to remote — work is NOT complete until `git push` succeeds
+3. Push to both remotes — work is NOT complete until `git push origin <branch>`
+   (GitHub) succeeds. Mirror to Forge with `git push forge <branch>`.
 4. Provide context for next session
