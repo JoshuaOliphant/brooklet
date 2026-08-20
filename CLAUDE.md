@@ -234,18 +234,59 @@ Container jobs also reject `uses:` steps and never receive Action secrets. So
 Python CI on Forge waits on two small upstream changes (a different image tag and
 a wider egress allowlist), not on anything in this repository.
 
+Re-checked 2026-08-20 against `@smolai/forge` 0.4.0 GA: still blocked. The
+container CI docs describe the standard image as carrying "pinned pnpm and Bun
+toolchains" and nothing else, and list `uses:` steps among the cases that "fail
+closed". One restriction was added rather than lifted — container workflows
+"currently accept public repositories only". GitHub Actions remains the only CI
+here that proves anything ran.
+
 Be aware Forge's own workflows are written against GitHub semantics Forge does
 not fully implement: `ci.yml` uses `branches-ignore`, which Forge does not parse,
 so it fires on every branch, and `git-ingest-contracts.yml` uses `push.paths`,
 which Forge parses and ignores.
 
-The Forge **Wiki** is unavailable to this account: it sits behind a beta
-allowlist and every wiki endpoint returns 403 "Forge Wiki is not enabled for
-this account". When access is granted, one call both enables and builds it —
-`POST /api/repos/:owner/:repo/wiki/builds` — and generation is host-funded, so
-it costs the account nothing and needs no model credential. Wiki pages are
-model-derived from the source, never hand-authored; the only way to steer them
-is a committed `.forge/wiki.json`.
+The Forge **Wiki** was unavailable to this account through 2026-08-08: it sat
+behind a beta allowlist and every endpoint returned 403 "Forge Wiki is not
+enabled for this account". That is no longer the failure. Re-probed 2026-08-20
+with the git-credential token, `GET /api/repos/joshua-oliphant/brooklet/wiki`
+returns 500 and `/wiki/pages` returns 404 — the allowlist rejection is gone, but
+no wiki has been built for this repository. `POST /api/repos/:owner/:repo/wiki/builds`
+is not in the contract and never was; it came from the prose docs, so confirm it
+still exists before relying on it. Wiki pages are model-derived from the source,
+never hand-authored; the only way to steer them is a committed `.forge/wiki.json`.
+
+The contract now documents a stateless Streamable HTTP MCP server at
+`POST /mcp/wiki`, with tools `read_wiki_structure`, `read_wiki_contents` and
+`ask_question`. Public read tools need no token; `ask_question` needs a PAT
+carrying the `wiki:ask` scope. That is the most directly useful thing Forge has
+added for agent work here — but it needs a built wiki first.
+
+`sf content` is the hand-authored counterpart: immutable Markdown drafts,
+anchored review threads, atomic publish, and pointer rollback to a prior
+release. It has not been exercised here. Note that `sf` keeps its own keychain
+credential separate from the git-credential token: `sf auth status` can report
+`authenticated: false` while `scripts/forge_issue.py` and direct API calls work
+fine. Run `sf auth login` before assuming the CLI is broken.
+
+### CLI surface
+
+`sf` 0.4.0 GA carries 74 commands, up from 39 in 0.4.0-preview.0. Nothing was
+removed, and none of these groups existed when this project moved to Forge:
+
+- `sf pr create|list|view` — pull requests without leaving the terminal.
+- `sf agent create|message|events|approve|cancel|profiles` — durable
+  repository-agent threads at an explicit execution tier, with an approval gate.
+- `sf release enqueue|status|watch` — submit an exact feature SHA to the
+  protected production merge queue.
+- `sf content …` — the Markdown publishing pipeline described above.
+- `sf benchmark` — plan or run an exact-tree Forge/GitHub comparison.
+
+`sf gist import` also still ships, but the Gists API was deleted from the
+platform and `GET /api/snippets/:id` replaced it. The command is dead; do not
+build on it.
+
+Nothing in this list is used by this repository yet.
 
 Forge is alpha and changes often. Check for platform drift with:
 
