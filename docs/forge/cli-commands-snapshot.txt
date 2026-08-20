@@ -1,13 +1,42 @@
 sf actions cancel
 sf actions inspect
 sf actions list
+sf agent approve
+sf agent cancel
+sf agent create
+sf agent events
+sf agent list
+sf agent message
+sf agent profiles
+sf agent view
 sf auth git-credential
 sf auth login
 sf auth logout
 sf auth revoke
 sf auth status
+sf benchmark
 sf clone-url
 sf commands
+sf content comment add
+sf content comment assign
+sf content comment reply
+sf content comment resolve
+sf content comments
+sf content create
+sf content draft
+sf content draft diff
+sf content draft preview
+sf content draft pull
+sf content draft push
+sf content get
+sf content grant
+sf content history
+sf content import
+sf content inspect
+sf content list
+sf content publish
+sf content release status
+sf content rollback
 sf deploy check
 sf deploy list
 sf deploy promote
@@ -24,7 +53,13 @@ sf hooks status
 sf llms
 sf migrate
 sf operator status
+sf pr create
+sf pr list
+sf pr view
 sf register
+sf release enqueue
+sf release status
+sf release watch
 sf repo create
 sf repo get
 sf repo import

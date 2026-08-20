@@ -42,13 +42,17 @@ sf commands --json
 sf schema --json
 ```
 
-After creating a repository, install a repository-scoped Git credential and
-verify the remote without putting a token in the URL or shell history:
+`sf auth login` installs a Forge-only Git credential helper. It mints and
+caches a one-day, repository-scoped credential only when Git accesses a Forge
+remote; it does not change remotes or generic Git helpers. Verify normally:
 
 ```bash
-sf auth git-credential <owner>/<repo>
+sf auth login
 git ls-remote origin HEAD
 ```
+
+`sf auth logout` revokes helper-issued repository credentials, removes that
+Forge-only helper, and deletes the local Forge session.
 
 For automatic agent transcript capture in an existing checkout:
 
@@ -254,7 +258,7 @@ https://forge.smol.ai/docs/docs/forge-ai-v1
 
 ## Releasing the Forge platform
 
-Forge itself uses `forge-release/v2`. Feature tasks push immutable branch SHAs,
+Forge validates exact feature SHAs, serializes merges, and releases exact merged SHAs. Feature tasks push immutable branch SHAs,
 open ready pull requests, and submit them to the protected merge queue. They do
 not push `main`, run provider deployment commands, or negotiate a release lane.
 
@@ -268,21 +272,19 @@ sf release enqueue "$SHA" \
   --yes \
   --json
 
-sf release status fmq_request_id --repo swyx/forge --json
-sf release watch fmq_request_id --repo swyx/forge --json
+sf release status merge_request_uuid --repo swyx/forge --json
+sf release watch merge_request_uuid --repo swyx/forge --json
 ```
 
-Affected CI produces signed evidence bound to the exact feature SHA and target
-base. The merge queue is the only normal authority that advances `main`. One
-resumable controller owns managed Workers and connected edge under a monotonic
-Durable Object fencing token. D1 stores the durable queue, plan, phase history,
-and provider receipts; it is not the runtime mutex.
+Affected CI runs the workflow registered from the exact target base. The merge
+queue is the only normal authority that advances `main`. ProductionDeployer
+reloads the workflow from the merged SHA and owns one production lease/fence.
+D1 stores attempts, component provider facts, and one append-only receipt per
+attempt; it is not the runtime mutex.
 
-If exact-candidate CI for the same base is already running, the queue joins it;
-it does not launch a duplicate validation run. Managed Workers activate in
-dependency-safe parallel waves. Cancellation is terminal and resumable. A
-signed plan containing a new component bootstraps deploy-control under the
-existing fence, then resumes with the exact-source manifest.
+If exact-SHA CI for the same base already succeeded, the queue reuses it.
+After merge, affected provider versions build once and activate in
+dependency-safe waves with observed-prior CAS and rollback.
 
 Impact is component-scoped. The controller compares each component input-tree
 digest with its last successful activation receipt. Unchanged components may
@@ -291,7 +293,7 @@ impact baseline, so release completion must never require every Worker to match
 the edge SHA.
 
 The supported observation contract is `sf release status/watch` and schema
-`forge.release.status.v2`.
+`forge.release.status.v1`.
 
 Direct Wrangler and local component deployment are audited break-glass recovery
 only.
@@ -312,7 +314,7 @@ an all-Workers release.
 
 Normative references:
 
-- https://forge.smol.ai/docs/docs/deploy/release-state-machine-v2
+- https://forge.smol.ai/docs/docs/deploy/trusted-release
 - https://forge.smol.ai/docs/docs/operations/production-deployment
 - https://forge.smol.ai/blog
 
@@ -563,8 +565,8 @@ https://forge.smol.ai/spec/deploy/v1#migrate
 
 ## Agent Git Authentication Quickstart
 
-Browser login authenticates the web app only. It does not configure credentials
-for local `git pull` or `git push`.
+Browser login authenticates the web app only. Use the Forge CLI to configure
+local Git access; do not copy browser credentials into a terminal.
 
 ### Paste this into an agent with browser access
 
@@ -577,13 +579,10 @@ active Forge account from the account menu or https://forge.smol.ai/settings
 before making any write. Browser authentication is stored in that browser's
 site storage, not in a cookie or the terminal.
 
-For local Git work, open the target repository's Git / Agent Auth panel. Create
-a short-lived, repository-scoped Personal Access Token (PAT) with only the
-needed scopes, select the correct operating system, and run its generated setup
-block in the local repository terminal. It installs the credential through the
-OS credential helper and keeps `credential.useHttpPath` enabled. Never put a
-PAT in a Git remote URL. Verify with `git ls-remote origin HEAD`, then revoke the
-PAT when the task is complete if it will not be reused.
+For local Git work, install `@smolai/forge` and run `sf auth login`. It configures
+a Forge-only Git credential helper. Git automatically receives a short-lived,
+repository-scoped credential for each Forge remote; never put a token in a
+remote URL. Verify with `git ls-remote origin HEAD`.
 
 Do not copy, print, commit, or paste the browser session JWT into chat, shell
 history, source code, a remote URL, or a transcript. Do not inspect browser
@@ -595,95 +594,28 @@ from the browser profile, keychain, or another application's storage.
 ```
 
 This lets a browser-capable agent reuse an already authenticated web session
-for Forge UI/API work. For Git, it must still use a repo-scoped PAT: the browser
-session token is deliberately not a Git credential and must remain in browser
-storage.
+for Forge UI/API work. The browser session token is deliberately not a Git
+credential and must remain in browser storage.
 
-The supported agent path is the SmolForge CLI. It creates a repository-scoped
-Personal Access Token (PAT), configures `credential.useHttpPath`, updates the
-remote, and sends the PAT to the configured operating-system credential helper
-without putting the token in the remote URL or command arguments.
+The supported local Git path is the SmolForge CLI. Login installs a Forge-only
+credential helper and keeps `credential.useHttpPath` enabled. When Git accesses
+`https://forge.smol.ai/<owner>/<repo>.git`, the helper securely mints or reuses
+a one-day, repository-scoped credential in the OS keychain. `sf auth logout`
+revokes every credential it created before removing the helper and CLI session.
 
 ```bash
 npm install -g @smolai/forge
 sf auth login --username <username>
-sf auth git-credential <owner>/<repo>
 git ls-remote origin HEAD
 git push origin "$(git branch --show-current)"
 ```
 
 `sf auth login` can read the password from stdin when no TTY is available. For
 automation, `SMOLFORGE_USERNAME` and `SMOLFORGE_PASSWORD` are also accepted.
-On macOS the credential installer selects `osxkeychain`; on Linux it selects
-`libsecret`; on Windows it selects `manager-core`. If a helper is already
-configured, the CLI preserves it. Override detection with `--helper <name>`.
-
-To supply an existing PAT instead of creating one:
-
-```bash
-export FORGE_USERNAME=<username>
-export FORGE_TOKEN=<personal-access-token>
-sf auth git-credential <owner>/<repo>
-```
-
-For Git Smart HTTP, the remote remains
-`https://forge.smol.ai/<owner>/<repo>.git`. The Basic-auth username is the Forge
-username and the HTTPS password is the PAT. Tokens are scoped by repository path,
-so `credential.useHttpPath` must remain enabled.
-
-### Create and install a PAT manually
-
-Create a PAT using the session Bearer token returned by `POST /api/auth/login`:
-
-```http
-POST /api/auth/tokens
-Authorization: Bearer <session-token>
-Content-Type: application/json
-
-{
-  "name": "codex-local",
-  "scopes": ["repo:read", "repo:write", "transcripts:write"],
-  "expires_in": "30d",
-  "repository": "<owner>/<repo>"
-}
-```
-
-The plaintext token is returned only in this creation response. On macOS, install
-it without embedding it in shell history or the remote URL:
-
-```bash
-export FORGE_USERNAME=<username>
-export FORGE_TOKEN=<personal-access-token>
-git config --local credential.helper osxkeychain
-git config --local credential.useHttpPath true
-git remote set-url origin https://forge.smol.ai/<owner>/<repo>.git
-printf 'protocol=https\nhost=forge.smol.ai\npath=<owner>/<repo>.git\nusername=%s\npassword=%s\n\n' \
-  "$FORGE_USERNAME" "$FORGE_TOKEN" | git credential approve
-unset FORGE_TOKEN
-git ls-remote origin HEAD
-```
-
-On Linux, use `libsecret` in place of `osxkeychain` after installing the Git
-credential libsecret helper. Never place a token directly in a Git remote URL.
-
-### Non-interactive plaintext fallback
-
-Use this only in an isolated, short-lived environment that has no secure
-credential helper. The CLI requires `--plaintext` explicitly, stores the token
-under `.git/credentials` with mode `0600`, and prints a warning:
-
-```bash
-export FORGE_USERNAME=<username>
-export FORGE_TOKEN=<personal-access-token>
-sf auth git-credential <owner>/<repo> --plaintext
-unset FORGE_TOKEN
-```
-
-Remove the file when the job finishes:
-
-```bash
-rm -f "$(git rev-parse --git-dir)/credentials"
-```
+The installed helper invokes the exact CLI executable that performed login, so
+Git remains authenticated across FNM/Node version switches. It does not modify
+GitHub or other Git hosts, generic credential helpers, local remotes, or source
+files. Read-only collaborators receive a read-scoped credential and cannot push.
 
 ---
 
@@ -736,7 +668,9 @@ Authorization: Bearer <token>
 ### Personal Access Tokens
 
 Supported scopes are `repo:read`, `repo:write`, `transcripts:write`,
-`actions:read`, `actions:write`, `gist:read`, `gist:write`, `wiki:ask`,
+`actions:read`, `actions:write`, `gist:read`, `gist:write`, `skit:read`,
+`skit:write`, `wiki:ask`, `content:read`, `content:write`,
+`content:comment`, `content:publish`,
 `agent:read`, `agent:message`, `agent:run`, `agent:cancel`, `agent:approve`,
 `agent:write`, and reserved `agent:configure`. Supported expirations are `1h`,
 `1d`, `30d`, and `never`. Token values are shown once in the creation response.
@@ -763,82 +697,58 @@ Authorization: Bearer <session-token>
 
 ---
 
-## Gists
+## SKITs
 
-Gists are bounded text snippets with up to 10 files. Public gists appear in
-discovery; unlisted gists are omitted from discovery but remain readable by
-anyone who has the opaque URL.
+A SKIT is one atomic, versioned bundle containing one or more independently
+addressable skills. Drafts are editable; releases and their download URLs are
+immutable. Child skills retain stable identities and content hashes.
 
 ```
-GET /api/gists
-Auth: optional (`gist:read` PAT scope)
-Query: `page` (default 1), `per_page` (default 20, maximum 50), optional
-`owner=<username>` for one owner's public gists, optional `q=<text>` to search
-descriptions and filenames (maximum 64 characters)
-→ {
-    "gists": [{ "id", "description", "visibility", "file_count", "first_filename", "preview", "owner", ... }],
-    "pagination": { "page": 1, "per_page": 20 }
-  }
+GET /api/skits
+Auth: optional (`skit:read` PAT scope)
+Query: optional `owner=<username>` or authenticated `mine=1`
+→ { "skits": [...] }
 
-GET /api/gists?mine=1
-Auth: required
-Also accepts `page` and `per_page`.
-→ {
-    "gists": [public and unlisted gists owned by the current user],
-    "pagination": { "page": 1, "per_page": 20 }
-  }
+POST /api/skits
+PUT /api/skits/:owner/:slug/draft
+Auth: required (`skit:write` PAT scope)
+Body: title, description, visibility, descriptor, expected_revision_id, and
+bounded base64-encoded files
+→ { "draft": { "revision_id", "bundle_digest", "diagnostics", ... } }
 
-POST /api/gists
-Auth: required (`gist:write` PAT scope)
-{
-  "description": "optional",
-  "visibility": "public"|"unlisted",
-  "files": [{ "filename": "snippet.ts", "content": "export {}" }]
-}
-→ 201 { "gist": { ..., "files": [...] } }
+GET /api/skits/:owner/:slug
+Auth: optional (`skit:read` PAT scope)
+→ { "skit", "skills", "files", "releases", "installations" }
 
-GET /api/gists/:id
-Auth: optional
-→ { "gist": { ..., "files": [...] } }
+POST /api/skits/:owner/:slug/releases
+Auth: required, owner only (`skit:write` PAT scope)
+{ "version": "1.2.3", "revision_id": "exact draft revision", "archive_base64": "..." }
+→ 201 { "release": { "id", "version", "archive_digest" } }
 
-GET /api/gists/:id/raw/:filename
-Auth: optional
-→ text/plain
+GET /api/skits/:owner/:slug/releases/:version/download
+Auth: optional; private releases require owner authorization
+→ immutable ZIP archive consumable by Agent Skills clients
 
-GET /api/gists/:id/revisions
-Auth: optional
-Query: `page`, `per_page` (maximum 50)
-→ { "revisions": [{ "id", "revision_number", "description", "visibility", "file_count", "created_at", ... }], "pagination": ... }
+PUT /api/skits/:owner/:slug/favorite
+PUT /api/skits/:owner/:slug/skills/:skill/favorite
+PUT /api/skits/:owner/:slug/library
+Auth: required (`skit:write` PAT scope)
+→ favorite state or cloud desired state; a library click remains pending until
+  a device reports a confirmed agent installation
 
-GET /api/gists/:id/revisions/:revisionId
-Auth: optional
-→ { "revision": { ..., "files": [{ "filename", "content", "position" }] } }
-
-PUT /api/gists/:id/star
-DELETE /api/gists/:id/star
-Auth: required (`gist:write` PAT scope)
-→ { "star_count", "fork_count", "viewer_has_star" }
-
-POST /api/gists/:id/forks
-Auth: required (`gist:write` PAT scope)
-{ "revision_id": "exact immutable revision id" }
-→ 201 { "gist": { ..., "forked_from": { "gist_id", "revision_id" } } }
-
-PATCH /api/gists/:id
-Auth: required, owner only (`gist:write` PAT scope)
-{ "description", "visibility", "files" }
-→ { "gist": { ..., "files": [...] } }
-
-DELETE /api/gists/:id
-Auth: required, owner only (`gist:write` PAT scope)
-→ 204
+POST /api/skits/devices/:device/reconcile
+Auth: required (`skit:write` PAT scope)
+→ cloud desired state plus confirmed installed, drifted, conflicted, or
+  unsupported observations
 ```
 
-Each filename is a root-level name, not a path. A file may contain at most
-256 KiB of UTF-8 text and one gist may contain at most 1 MiB in total. Each
-Gist retains at most 100 immutable revisions, each account retains at most
-100 MiB of revision history, and search is derived metadata rather than
-authoritative content.
+Forge stores bounded SKIT metadata in D1 and bodies in content-addressed object
+storage. Local installation is managed by `sf add skit`, `sf skit install`,
+`skit add`, or `skit install`; these spellings share one implementation.
+
+Migrated non-skill snippets have visibility-preserving reads at
+`GET /api/snippets/:id`; exact history is owner-only. This preservation sink is
+not a general content editor or publishing product.
 
 ---
 
