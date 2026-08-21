@@ -250,7 +250,13 @@ def test_version_flag(tmp_path):
     result = runner.invoke(app, ["--version"])
     assert result.exit_code == 0
     assert "brooklet" in result.output
-    assert brooklet.__version__ in result.output
+    assert f"brooklet {brooklet.__version__}" in result.output
+
+
+def test_version_matches_installed_distribution():
+    from importlib.metadata import version
+
+    assert brooklet.__version__ == version("brooklet")
 
 
 def test_cat_outputs_all_events(tmp_path):
