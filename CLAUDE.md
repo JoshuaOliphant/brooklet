@@ -246,21 +246,32 @@ not fully implement: `ci.yml` uses `branches-ignore`, which Forge does not parse
 so it fires on every branch, and `git-ingest-contracts.yml` uses `push.paths`,
 which Forge parses and ignores.
 
-The Forge **Wiki** was unavailable to this account through 2026-08-08: it sat
-behind a beta allowlist and every endpoint returned 403 "Forge Wiki is not
-enabled for this account". That is no longer the failure. Re-probed 2026-08-20
-with the git-credential token, `GET /api/repos/joshua-oliphant/brooklet/wiki`
-returns 500 and `/wiki/pages` returns 404 — the allowlist rejection is gone, but
-no wiki has been built for this repository. `POST /api/repos/:owner/:repo/wiki/builds`
-is not in the contract and never was; it came from the prose docs, so confirm it
-still exists before relying on it. Wiki pages are model-derived from the source,
-never hand-authored; the only way to steer them is a committed `.forge/wiki.json`.
+The Forge **Wiki** is still unavailable to this account. Re-probed 2026-08-20
+with the git-credential token, the write endpoints remain allowlisted:
+
+    POST /api/repos/joshua-oliphant/brooklet/wiki/builds -> 403 "Forge Wiki is not enabled for this account"
+    POST /api/repos/joshua-oliphant/brooklet/wiki/ask    -> 403 (same)
+    GET  /api/repos/joshua-oliphant/brooklet/wiki/search-index -> 404 "Wiki has not been generated"
+
+`POST .../wiki/builds` does exist and is the enable-and-build call, even though it
+is absent from `llms.txt`. Read endpoints are reachable; the gate is on writes.
+
+Do not read `GET /api/repos/:owner/:repo/wiki` as an access signal. It returns
+500 for this repository *and* for `swyx/forge`, which has a working wiki — the
+500 is a server-side bug on that route, not an account verdict. Probing it first
+led to a wrong "the allowlist lifted" conclusion on 2026-08-20. **Test access with
+`POST .../wiki/builds` and read the error body**, which is specific and honest.
+
+Wiki pages are model-derived from the source, never hand-authored; the only way to
+steer them is a committed `.forge/wiki.json`. Docs add that only repository writers
+and admins may start builds, capped at 100 manual builds per user per UTC day.
 
 The contract now documents a stateless Streamable HTTP MCP server at
 `POST /mcp/wiki`, with tools `read_wiki_structure`, `read_wiki_contents` and
 `ask_question`. Public read tools need no token; `ask_question` needs a PAT
-carrying the `wiki:ask` scope. That is the most directly useful thing Forge has
-added for agent work here — but it needs a built wiki first.
+carrying the `wiki:ask` scope. It would be the most directly useful thing Forge
+has added for agent work here, but it is unreachable until the account is taken
+off the Wiki allowlist — `/wiki/ask` returns the same 403 as `/wiki/builds`.
 
 `sf content` is the hand-authored counterpart: immutable Markdown drafts,
 anchored review threads, atomic publish, and pointer rollback to a prior
