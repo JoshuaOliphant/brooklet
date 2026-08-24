@@ -3,9 +3,12 @@
 
 import json
 
+import pytest
 from typer.testing import CliRunner
 
 import brooklet
+import brooklet.cli
+import brooklet.cli.app as app_module
 from brooklet.cli.app import app
 
 runner = CliRunner()
@@ -325,3 +328,16 @@ def test_stream_dir_env_var(tmp_path, monkeypatch):
 
     result = runner.invoke(app, ["topics"])
     assert "env-topic" in result.output
+
+
+def test_cli_package_forwards_lazy_names_to_app_module():
+    # `import brooklet.cli.app` binds the submodule onto the package, so the
+    # "app" name only reaches __getattr__ through an explicit call.
+    assert brooklet.cli.__getattr__("app") is app_module.app
+    assert brooklet.cli.main is app_module.main
+    assert brooklet.cli._watch_impl is app_module._watch_impl
+
+
+def test_cli_package_rejects_unknown_attribute():
+    with pytest.raises(AttributeError, match="module 'brooklet.cli' has no attribute 'nope'"):
+        _ = brooklet.cli.nope
