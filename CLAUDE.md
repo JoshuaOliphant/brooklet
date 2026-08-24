@@ -162,21 +162,54 @@ git config forge.repo joshua-oliphant/brooklet    # tells them which repo to use
 
 ## Forge Platform Notes
 
-**Forge is the primary remote.** `origin` points at
-https://forge.smol.ai/joshua-oliphant/brooklet.git; `github` is the backup
-mirror. Because `sf` infers the repository from `origin`, this arrangement also
-makes bare `sf` commands work without an explicit repository argument.
+**Issues live on Forge; the git remote points at GitHub.** These are two
+separate things, and conflating them has caused a wrong "the tracker is empty"
+conclusion before. Verified 2026-08-23:
 
-Keep the two in sync — push both:
-
-```bash
-git push origin main     # Forge (primary)
-git push github main     # GitHub (backup mirror)
+```
+$ git remote -v
+origin  https://github.com/JoshuaOliphant/brooklet.git (fetch)
+origin  https://github.com/JoshuaOliphant/brooklet.git (push)
 ```
 
-Mirroring is manual for now. Automating it as a Forge action has to wait until
-Forge Actions actually execute steps rather than simulating them (see below);
-until then a Forge-side sync job would report success without pushing anything.
+There is **one** remote, and it is GitHub. There is no `forge` or `github`
+remote. So `git push origin main` pushes code to GitHub, and the two-remote
+mirroring described in earlier revisions of this file does not apply to this
+clone — `git push github main` fails with "does not appear to be a git
+repository".
+
+Code and issues are therefore split across hosts:
+
+| what | where | how |
+| --- | --- | --- |
+| code | GitHub, via `origin` | `git push origin main` |
+| issues | Forge, `joshua-oliphant/brooklet` | `python3 scripts/forge_issue.py` |
+
+`scripts/forge_issue.py` does not read `origin`. It reads `git config
+forge.repo`, so it keeps working regardless of where the remote points. If it
+prints "No Forge repo configured", that is the missing config, **not** an empty
+tracker:
+
+```bash
+git config forge.repo joshua-oliphant/brooklet
+```
+
+Note that `sf` does infer its repository from `origin`. With `origin` on GitHub,
+bare `sf` commands no longer resolve to the Forge repo and need an explicit
+repository argument.
+
+To restore the documented two-remote arrangement, add Forge as the primary and
+demote GitHub to a named mirror:
+
+```bash
+git remote rename origin github
+git remote add origin https://forge.smol.ai/joshua-oliphant/brooklet.git
+```
+
+Then push both; mirroring is manual. Automating it as a Forge action has to wait
+until Forge Actions actually execute steps rather than simulating them (see
+below); until then a Forge-side sync job would report success without pushing
+anything.
 
 Two sharp edges worth knowing:
 
@@ -327,12 +360,30 @@ This project uses Claude Code harness engineering.
 - **Convention tests** in `tests/test_conventions.py` enforce ABOUTME mechanically
 - **Decision records** live in `docs/decisions/` (DEC-NNN format)
 
+## Agent skills
+
+### Issue tracker
+
+Forge issues at https://forge.smol.ai/joshua-oliphant/brooklet, driven by
+`python3 scripts/forge_issue.py`. Not GitHub Issues. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five canonical roles, unrenamed: `needs-triage`, `needs-info`,
+`ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context. Decision records live in `docs/decisions/` as `DEC-NNN`, not in a
+`docs/adr/`. See `docs/agents/domain.md`.
+
 ## Session Completion
 
 When ending a work session, complete ALL steps:
 
 1. Run quality gates (tests, linters) if code changed
 2. Commit all changes
-3. Push to both remotes — work is NOT complete until `git push origin <branch>`
-   (Forge, primary) succeeds. Mirror to the backup with `git push github <branch>`.
+3. Push — work is NOT complete until `git push origin <branch>` succeeds.
+   `origin` is GitHub; there is no second remote in this clone. See Forge
+   Platform Notes if you restore the two-remote arrangement.
 4. Provide context for next session
