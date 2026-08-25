@@ -1,5 +1,9 @@
 # Beads → Forge issues migration
 
+> **Historical.** The tracker has since moved again, from Forge to GitHub.
+> Forge numbers below do not correspond to GitHub issue numbers. See
+> `docs/agents/issue-tracker.md` for current practice.
+
 Brooklet's tracker moved from beads to Forge issues
 (https://forge.smol.ai/joshua-oliphant/brooklet). `.beads/` is kept as a
 read-only archive; nothing is created or updated there any more.
