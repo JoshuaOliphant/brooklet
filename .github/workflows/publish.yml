@@ -2,11 +2,7 @@ name: publish
 on:
   release:
     types: [published]
-  # SmolForge does not recognise the `release` event. A workflow whose events it
-  # recognises none of falls back to push-on-default-branch, which made Forge run
-  # this publish workflow on every push to main. Declaring an event Forge does
-  # know stops that fallback; GitHub treats it as an added manual trigger and the
-  # release trigger above is unaffected.
+  # Manual trigger, for re-running a publish without cutting a new release.
   workflow_dispatch:
 
 permissions:
