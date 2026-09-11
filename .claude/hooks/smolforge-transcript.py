@@ -3,6 +3,10 @@
 # ABOUTME: Runs as a PostToolUse hook after `git commit`, or manually for dry-runs and backfill.
 """Upload Claude Code transcripts to SmolForge.
 
+DORMANT. This project retired Forge; its tracker and remote are both GitHub
+(see CLAUDE.md). The hook is kept for reference, is not wired into
+`.claude/settings.json`, and cannot run without a Forge token.
+
 Opt-in by design. The hook is inert unless the repository sets:
 
     git config --bool forge.transcripts.enabled true
